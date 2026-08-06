@@ -10,7 +10,6 @@ import argparse
 import sys
 import os
 import time
-import math
 import signal
 import subprocess
 import yaml
@@ -22,7 +21,6 @@ import pygame
 import gymnasium as gym
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -361,6 +359,7 @@ class PPOAgent:
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
         torch.nn.utils.clip_grad_norm_(self.value.parameters(), 0.5)
         self.optimizer.step()
+        opencl_ocl.invalidate_params()
         return policy_loss.item(), value_loss.item(), entropy.item()
 
 
@@ -368,6 +367,7 @@ class LaserHazardWrapper(gym.Wrapper):
     def __init__(self, env, laser_speed=0.5, laser_range=2.0, laser_activate_after=100):
         super().__init__(env)
         self.laser_pos = -5
+        self._base_laser_speed = laser_speed
         self.laser_speed = laser_speed
         self.laser_range = laser_range
         self.laser_activate_after = laser_activate_after
@@ -383,6 +383,7 @@ class LaserHazardWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.laser_pos = -5
+        self.laser_speed = self._base_laser_speed
         self.laser_direction = 1.0
         self.laser_active = False
         self.step_count = 0
@@ -774,11 +775,11 @@ class WalkerTrainer:
 
             if done or episode_steps >= self.max_steps:
                 self.episode += 1
-        laser_info = ""
-        laser_speed = 0.0
-        if hasattr(self.env, 'env') and hasattr(self.env.env, 'laser_speed'):
-            laser_speed = self.env.env.laser_speed
-            laser_info = f" | Laser spd={laser_speed:.2f}"
+                laser_info = ""
+                laser_speed = 0.0
+                if hasattr(self.env, 'env') and hasattr(self.env.env, 'laser_speed'):
+                    laser_speed = self.env.env.laser_speed
+                    laser_info = f" | Laser spd={laser_speed:.2f}"
                 avg = self._log_episode(self.episode, episode_reward, episode_steps, laser_speed)
                 print(f"Episode {self.episode:4d} | Reward: {episode_reward:8.2f} | Avg50: {avg:7.2f} | Steps: {episode_steps:4d}{laser_info}")
 
@@ -910,8 +911,6 @@ class WalkerTrainer:
                 print(f"  [update] {self.epochs_per_update} epochs over {len(flat_trajectories)} steps in {dt:.2f}s")
 
                 trajectories = [[] for _ in range(self.num_envs)]
-                obs, _ = self.env.reset()
-                obs, _ = self.env.reset()
 
     def _run_inference(self):
         ckpt_path = "best_walker.pt"
@@ -931,10 +930,11 @@ class WalkerTrainer:
         episode_reward = 0.0
         episode_steps = 0
         episode = 0
+        max_inference_episodes = 10
 
-        print(f"Running inference for {self.max_episodes} episodes...")
+        print(f"Running inference for {max_inference_episodes} episodes...")
         try:
-            while episode < self.max_episodes:
+            while episode < max_inference_episodes:
                 action, logp, value = self.agent.get_action(obs)
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated

@@ -32,9 +32,11 @@ cl_kernel ocr_k_relu_bwd = nullptr;
 cl_kernel ocr_k_tanh_bwd = nullptr;
 cl_kernel ocr_k_linear_bwd = nullptr;
 bool ocr_initialized = false;
+bool ocr_device_ready = false;
 
 std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
 std::unordered_map<size_t, cl_mem> g_buf_cache;
+std::unordered_map<void*, uint64_t> g_param_version;
 
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
@@ -159,6 +161,7 @@ void ensure_init() {
     if (platforms.empty()) {
         std::cerr << "No OpenCL platforms found, using CPU fallback" << std::endl;
         ocr_initialized = true;
+        ocr_device_ready = false;
         return;
     }
 
@@ -172,16 +175,19 @@ void ensure_init() {
     if (devices.empty()) {
         std::cerr << "No OpenCL devices found, using CPU fallback" << std::endl;
         ocr_initialized = true;
+        ocr_device_ready = false;
         return;
     }
 
     ocr_device = devices[0]();
     std::cout << "OpenCL device: " << devices[0].getInfo<CL_DEVICE_NAME>() << std::endl;
+    ocr_device_ready = true;
 
     ocr_ctx = clCreateContext(props, 1, &ocr_device, nullptr, nullptr, nullptr);
     if (!ocr_ctx) {
         std::cerr << "Failed to create OpenCL context, using CPU fallback" << std::endl;
         ocr_initialized = true;
+        ocr_device_ready = false;
         return;
     }
 
@@ -191,6 +197,7 @@ void ensure_init() {
         ocr_ctx = nullptr;
         std::cerr << "Failed to create OpenCL command queue, using CPU fallback" << std::endl;
         ocr_initialized = true;
+        ocr_device_ready = false;
         return;
     }
 
@@ -226,16 +233,21 @@ void ensure_init() {
 
 inline size_t round_up(size_t v, size_t m) { return (v + m - 1) / m * m; }
 
-cl_mem get_param_buffer(const float* host, size_t nbytes) {
+cl_mem get_param_buffer(const float* host, size_t nbytes, bool force_upload = false) {
     void* key = const_cast<float*>(host);
     auto it = g_param_cache.find(key);
     if (it != g_param_cache.end() && it->second.second == nbytes) {
-        clEnqueueWriteBuffer(ocr_queue, it->second.first, CL_TRUE, 0, nbytes, host, 0, nullptr, nullptr);
+        auto ver_it = g_param_version.find(key);
+        if (ver_it == g_param_version.end() || force_upload) {
+            clEnqueueWriteBuffer(ocr_queue, it->second.first, CL_TRUE, 0, nbytes, host, 0, nullptr, nullptr);
+            g_param_version[key] = 0;
+        }
         return it->second.first;
     }
     cl_mem buf = clCreateBuffer(ocr_ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, nbytes, const_cast<float*>(host), nullptr);
     if (!buf) throw std::runtime_error("Failed to allocate OpenCL param buffer");
     g_param_cache[key] = {buf, nbytes};
+    g_param_version[key] = 0;
     return buf;
 }
 
@@ -334,8 +346,8 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
     const float* xp = X.data_ptr<float>();
     float* op = out.data_ptr<float>();
 
-    cl_mem dW = get_param_buffer(wp, (size_t)N * K * sizeof(float));
-    cl_mem dB = get_param_buffer(bp, (size_t)N * sizeof(float));
+    cl_mem dW = get_param_buffer(wp, (size_t)N * K * sizeof(float), false);
+    cl_mem dB = get_param_buffer(bp, (size_t)N * sizeof(float), false);
     cl_mem dX = alloc_buffer((size_t)M * K * sizeof(float));
     cl_mem dY = alloc_buffer((size_t)M * N * sizeof(float));
 
@@ -370,20 +382,16 @@ torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B,
     float* op = out.data_ptr<float>();
 
     cl_mem dA = alloc_buffer((size_t)M * K * sizeof(float));
-    cl_mem dB = alloc_buffer((size_t)K * N * sizeof(float));
-    cl_mem dBias = alloc_buffer((size_t)N * sizeof(float));
+    cl_mem dB = get_param_buffer(bp, (size_t)K * N * sizeof(float), false);
+    cl_mem dBias = get_param_buffer(biasp, (size_t)N * sizeof(float), false);
     cl_mem dC = alloc_buffer((size_t)M * N * sizeof(float));
 
     clEnqueueWriteBuffer(ocr_queue, dA, CL_TRUE, 0, (size_t)M * K * sizeof(float), ap, 0, nullptr, nullptr);
-    clEnqueueWriteBuffer(ocr_queue, dB, CL_TRUE, 0, (size_t)K * N * sizeof(float), bp, 0, nullptr, nullptr);
-    clEnqueueWriteBuffer(ocr_queue, dBias, CL_TRUE, 0, (size_t)N * sizeof(float), biasp, 0, nullptr, nullptr);
     run_std_kernel(k, dA, dB, dBias, dC, (int)M, (int)N, (int)K);
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dC, CL_TRUE, 0, (size_t)M * N * sizeof(float), op, 0, nullptr, nullptr);
 
     release_buffer(dA);
-    release_buffer(dB);
-    release_buffer(dBias);
     release_buffer(dC);
     return out;
 }
@@ -419,6 +427,7 @@ void cleanup_ocl() {
     if (!ocr_initialized) return;
     for (auto& kv : g_param_cache) clReleaseMemObject(kv.second.first);
     g_param_cache.clear();
+    g_param_version.clear();
     for (auto& kv : g_buf_cache) clReleaseMemObject(kv.second);
     g_buf_cache.clear();
     if (ocr_k_linear) clReleaseKernel(ocr_k_linear);
@@ -441,10 +450,16 @@ void cleanup_ocl() {
     ocr_k_linear_bwd = nullptr;
     ocr_queue = nullptr;
     ocr_ctx = nullptr;
+    ocr_device = nullptr;
     ocr_initialized = false;
+    ocr_device_ready = false;
 }
 
 } // namespace
+
+void invalidate_param_cache() {
+    g_param_version.clear();
+}
 
 torch::Tensor linear_forward(torch::Tensor weight, torch::Tensor bias, torch::Tensor input) {
     return linear_kernel_dispatch(ocr_k_linear, weight, bias, input);
@@ -505,7 +520,7 @@ torch::Tensor relu_backward(torch::Tensor grad_output, torch::Tensor input) {
     const float* xp = X.data_ptr<float>();
     float* op = out.data_ptr<float>();
     cl_mem dG = alloc_buffer((size_t)n * sizeof(float));
-    cl_mem dX = alloc_buffer((size_t)n * sizeof(float));
+    cl_mem dX = get_param_buffer(xp, (size_t)n * sizeof(float), false);
     cl_mem dO = alloc_buffer((size_t)n * sizeof(float));
     clEnqueueWriteBuffer(ocr_queue, dG, CL_TRUE, 0, (size_t)n * sizeof(float), gp, 0, nullptr, nullptr);
     clEnqueueWriteBuffer(ocr_queue, dX, CL_TRUE, 0, (size_t)n * sizeof(float), xp, 0, nullptr, nullptr);
@@ -556,7 +571,8 @@ PYBIND11_MODULE(opencl_ocl, m) {
     m.def("relu_backward", &relu_backward, "ReLU backward (OpenCL)");
     m.def("tanh_backward", &tanh_backward, "Tanh backward (OpenCL)");
     m.def("cleanup", &cleanup_ocl, "Cleanup OpenCL resources");
-    m.def("is_available", []() { ensure_init(); return ocr_initialized; }, "Check if OpenCL is available");
+    m.def("invalidate_params", &invalidate_param_cache, "Clear param version map so next forward re-uploads weights");
+    m.def("is_available", []() { ensure_init(); return ocr_device_ready; }, "Check if OpenCL device is ready");
 
     m.attr("__library_version__") = "opencl_ocl-2.3.0";
 }
