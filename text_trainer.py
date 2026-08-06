@@ -13,6 +13,7 @@ import time
 import math
 import signal
 import subprocess
+import yaml
 import numpy as np
 import pygame
 import gymnasium as gym
@@ -23,6 +24,37 @@ from torch.utils.data import Dataset, DataLoader
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import opencl_ocl
+
+
+def load_config(path=None):
+    if path is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    defaults = {
+        "env": "BipedalWalker-v3",
+        "max_episodes": 5000,
+        "max_steps": 1600,
+        "update_interval": 2048,
+        "mini_batch_size": 64,
+        "epochs_per_update": 10,
+        "lr": 3e-4,
+        "gamma": 0.99,
+        "lam": 0.95,
+        "clip": 0.2,
+        "entropy_coef": 0.01,
+        "vf_coef": 0.5,
+        "laser_range": 2.0,
+        "laser_speed": 0.5,
+        "laser_activate_after": 100,
+        "hidden": 128,
+        "opencl_min_elements": 8192,
+        "fps": 30,
+        "record_video_container": "webm",
+    }
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        defaults.update({k: v for k, v in data.items() if v is not None})
+    return defaults
 
 
 class OpenCLLinear(torch.autograd.Function):
@@ -187,7 +219,7 @@ class ValueNet(nn.Module):
 
 
 class PPOAgent:
-    def __init__(self, obs_dim, act_dim, lr=3e-4, gamma=0.99, clip=0.2, entropy_coef=0.01, vf_coef=0.5):
+    def __init__(self, obs_dim, act_dim, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2, entropy_coef=0.01, vf_coef=0.5):
         self.device = torch.device("cpu")
         self.policy = PolicyNet(obs_dim, act_dim).to(self.device)
         self.value = ValueNet(obs_dim).to(self.device)
@@ -196,7 +228,7 @@ class PPOAgent:
             lr=lr
         )
         self.gamma = gamma
-        self.lam = 0.95
+        self.lam = lam
         self.clip = clip
         self.entropy_coef = entropy_coef
         self.vf_coef = vf_coef
@@ -379,13 +411,14 @@ class LaserHazardWrapper(gym.Wrapper):
 
 
 class WalkerTrainer:
-    def __init__(self, mode="runtrain", video_path=None, container="webm"):
-        self.env_name = "BipedalWalker-v3"
-        self.max_episodes = 5000
-        self.max_steps = 1600
-        self.update_interval = 2048
-        self.mini_batch_size = 64
-        self.epochs_per_update = 10
+    def __init__(self, mode="runtrain", video_path=None, container="webm", config_path=None):
+        cfg = load_config(config_path)
+        self.env_name = cfg.get("env", "BipedalWalker-v3")
+        self.max_episodes = int(cfg.get("max_episodes", 5000))
+        self.max_steps = int(cfg.get("max_steps", 1600))
+        self.update_interval = int(cfg.get("update_interval", 2048))
+        self.mini_batch_size = int(cfg.get("mini_batch_size", 64))
+        self.epochs_per_update = int(cfg.get("epochs_per_update", 10))
         self.mode = mode
         self.fix_mode = mode.startswith("fix")
         self.headless = mode in ("run", "fixrun", "train", "fixtrain")
@@ -398,12 +431,23 @@ class WalkerTrainer:
         self.fixer_opencl_proc = None
 
         self.env = gym.make(self.env_name, render_mode="rgb_array")
-        self.env = LaserHazardWrapper(self.env)
+        self.env = LaserHazardWrapper(self.env, laser_range=float(cfg.get("laser_range", 2.0)))
         self.env.headless = self.headless
         obs_dim = self.env.observation_space.shape[0]
         act_dim = self.env.action_space.shape[0]
 
-        self.agent = PPOAgent(obs_dim, act_dim)
+        self.agent = PPOAgent(
+            obs_dim,
+            act_dim,
+            lr=float(cfg.get("lr", 3e-4)),
+            gamma=float(cfg.get("gamma", 0.99)),
+            lam=float(cfg.get("lam", 0.95)),
+            clip=float(cfg.get("clip", 0.2)),
+            entropy_coef=float(cfg.get("entropy_coef", 0.01)),
+            vf_coef=float(cfg.get("vf_coef", 0.5)),
+        )
+        global _OCL_MIN_ELEMENTS
+        _OCL_MIN_ELEMENTS = int(cfg.get("opencl_min_elements", 8192))
 
         self.best_reward = -float("inf")
         self.episode = 0

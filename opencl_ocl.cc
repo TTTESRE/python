@@ -15,33 +15,24 @@
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #include <CL/cl2.hpp>
 
-// The linear GEMM is a simple, verified 2D-tiled SGEMM (TILE=16, local-memory
-// tiling) with bias and a fused activation. The activation is hard-coded into
-// three separate kernel sources (instead of -D macros) because some OpenCL
-// drivers cache programs by source content and ignore build options.
-// (Tiling/activation design inspired by dlprimitives, MIT, Artyom Beilis.)
-
 namespace {
 
 std::mutex ocl_init_mutex;
 cl_context ocr_ctx = nullptr;
 cl_command_queue ocr_queue = nullptr;
 cl_device_id ocr_device = nullptr;
-cl_kernel ocr_k_linear = nullptr;     // Y = X@W^T + B
+cl_kernel ocr_k_linear = nullptr;
 cl_kernel ocr_k_linear_relu = nullptr;
 cl_kernel ocr_k_linear_tanh = nullptr;
-cl_kernel ocr_k_relu = nullptr;       // unary elementwise
+cl_kernel ocr_k_relu = nullptr;
 cl_kernel ocr_k_tanh = nullptr;
+cl_kernel ocr_k_relu_bwd = nullptr;
+cl_kernel ocr_k_tanh_bwd = nullptr;
+cl_kernel ocr_k_linear_bwd = nullptr;
 bool ocr_initialized = false;
 
-// Cache of parameter buffers (weights / bias). Keyed by host data pointer so the
-// same nn.Parameter keeps its cl_mem across forward passes. We always re-upload
-// the contents because the optimizer mutates the storage in place during
-// training; this avoids re-allocating device memory every step.
 std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
 
-// Kernel source split into head (computes Y = sum + bias) and tail (closing
-// brace) so we can assemble three activation variants.
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
                     __global const float* X,
@@ -77,10 +68,37 @@ static std::string sgemm_src(const char* activation_line) {
     return std::string(CL_SOURCE_SGEMM_HEAD) + "\n" + activation_line + "\n" + std::string(CL_SOURCE_SGEMM_TAIL);
 }
 
-// No activation, relu, tanh variants (the activation line post-processes Y).
 const std::string SRC_LINEAR      = sgemm_src("// no activation");
 const std::string SRC_LINEAR_RELU = sgemm_src("if (row < M && col < N) Y[row*N + col] = (Y[row*N + col] > 0.0f) ? Y[row*N + col] : 0.0f;");
 const std::string SRC_LINEAR_TANH = sgemm_src("if (row < M && col < N) Y[row*N + col] = tanh(Y[row*N + col]);");
+
+const char* CL_SOURCE_SGEMM_STD = R"(
+__kernel void sgemm_std(int M, int N, int K,
+                        __global const float* A,
+                        __global const float* B,
+                        __global const float* bias,
+                        __global float* C) {
+    const int TILE = 16;
+    __local float a_tile[TILE*TILE];
+    __local float b_tile[TILE*TILE];
+    int row = get_global_id(0);
+    int col = get_global_id(1);
+    float sum = 0.0f;
+    int numTiles = (K + TILE - 1) / TILE;
+    for (int t = 0; t < numTiles; ++t) {
+        int ka = t*TILE + get_local_id(0);
+        a_tile[get_local_id(1)*TILE + get_local_id(0)] = (row < M && ka < K) ? A[row*K + ka] : 0.0f;
+        int kb = t*TILE + get_local_id(1);
+        b_tile[get_local_id(0)*TILE + get_local_id(1)] = (col < N && kb < K) ? B[kb*N + col] : 0.0f;
+        barrier(CLK_LOCAL_MEM_FENCE);
+        for (int i = 0; i < TILE; ++i)
+            sum += a_tile[get_local_id(1)*TILE + i] * b_tile[get_local_id(0)*TILE + i];
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (row < M && col < N)
+        C[row*N + col] = sum + bias[col];
+}
+)";
 
 const char* CL_SOURCE_RELU = R"(
 __kernel void relu_forward(__global const float* X, __global float* Y, int n) {
@@ -93,6 +111,20 @@ const char* CL_SOURCE_TANH = R"(
 __kernel void tanh_forward(__global const float* X, __global float* Y, int n) {
     int i = get_global_id(0);
     if (i < n) Y[i] = tanh(X[i]);
+}
+)";
+
+const char* CL_SOURCE_RELU_BWD = R"(
+__kernel void relu_backward(__global const float* G, __global const float* X, __global float* Y, int n) {
+    int i = get_global_id(0);
+    if (i < n) Y[i] = X[i] > 0.0f ? G[i] : 0.0f;
+}
+)";
+
+const char* CL_SOURCE_TANH_BWD = R"(
+__kernel void tanh_backward(__global const float* G, __global const float* Y, __global float* O, int n) {
+    int i = get_global_id(0);
+    if (i < n) O[i] = G[i] * (1.0f - Y[i]*Y[i]);
 }
 )";
 
@@ -182,6 +214,9 @@ void ensure_init() {
     build_prog(SRC_LINEAR_TANH, &ocr_k_linear_tanh, "sgemm");
     build_prog(CL_SOURCE_RELU, &ocr_k_relu, "relu_forward");
     build_prog(CL_SOURCE_TANH, &ocr_k_tanh, "tanh_forward");
+    build_prog(CL_SOURCE_RELU_BWD, &ocr_k_relu_bwd, "relu_backward");
+    build_prog(CL_SOURCE_TANH_BWD, &ocr_k_tanh_bwd, "tanh_backward");
+    build_prog(CL_SOURCE_SGEMM_STD, &ocr_k_linear_bwd, "sgemm_std");
 
     ocr_initialized = true;
 }
@@ -208,7 +243,6 @@ cl_mem alloc_buffer(size_t nbytes) {
 }
 
 void run_linear_kernel(cl_kernel k, cl_mem dW, cl_mem dX, cl_mem dB, cl_mem dY, int M, int N, int K) {
-    // sgemm(W, X, B, Y, M, K, N)
     clSetKernelArg(k, 0, sizeof(cl_mem), &dW);
     clSetKernelArg(k, 1, sizeof(cl_mem), &dX);
     clSetKernelArg(k, 2, sizeof(cl_mem), &dB);
@@ -216,6 +250,21 @@ void run_linear_kernel(cl_kernel k, cl_mem dW, cl_mem dX, cl_mem dB, cl_mem dY, 
     clSetKernelArg(k, 4, sizeof(int), &M);
     clSetKernelArg(k, 5, sizeof(int), &K);
     clSetKernelArg(k, 6, sizeof(int), &N);
+    size_t gws[2] = {round_up((size_t)M, 16), round_up((size_t)N, 16)};
+    size_t lws[2] = {16, 16};
+    cl_int err = clEnqueueNDRangeKernel(ocr_queue, k, 2, nullptr, gws, lws, 0, nullptr, nullptr);
+    if (err != CL_SUCCESS)
+        throw std::runtime_error("clEnqueueNDRangeKernel failed: " + ocl_error_str(err));
+}
+
+void run_std_kernel(cl_kernel k, cl_mem dA, cl_mem dB, cl_mem dBias, cl_mem dC, int M, int N, int K) {
+    clSetKernelArg(k, 0, sizeof(int), &M);
+    clSetKernelArg(k, 1, sizeof(int), &N);
+    clSetKernelArg(k, 2, sizeof(int), &K);
+    clSetKernelArg(k, 3, sizeof(cl_mem), &dA);
+    clSetKernelArg(k, 4, sizeof(cl_mem), &dB);
+    clSetKernelArg(k, 5, sizeof(cl_mem), &dBias);
+    clSetKernelArg(k, 6, sizeof(cl_mem), &dC);
     size_t gws[2] = {round_up((size_t)M, 16), round_up((size_t)N, 16)};
     size_t lws[2] = {16, 16};
     cl_int err = clEnqueueNDRangeKernel(ocr_queue, k, 2, nullptr, gws, lws, 0, nullptr, nullptr);
@@ -234,6 +283,18 @@ void run_unary_kernel(cl_kernel k, cl_mem dX, cl_mem dY, int n) {
         throw std::runtime_error("clEnqueueNDRangeKernel failed: " + ocl_error_str(err));
 }
 
+void run_binary_unary_kernel(cl_kernel k, cl_mem dX, cl_mem dY, cl_mem dO, int n) {
+    clSetKernelArg(k, 0, sizeof(cl_mem), &dX);
+    clSetKernelArg(k, 1, sizeof(cl_mem), &dY);
+    clSetKernelArg(k, 2, sizeof(cl_mem), &dO);
+    int ni = n;
+    clSetKernelArg(k, 3, sizeof(int), &ni);
+    size_t gws = round_up((size_t)n, 64);
+    cl_int err = clEnqueueNDRangeKernel(ocr_queue, k, 1, nullptr, &gws, nullptr, 0, nullptr, nullptr);
+    if (err != CL_SUCCESS)
+        throw std::runtime_error("clEnqueueNDRangeKernel failed: " + ocl_error_str(err));
+}
+
 torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::Tensor bias, torch::Tensor input) {
     ensure_init();
     auto W = weight.contiguous().to(torch::kFloat32);
@@ -245,7 +306,6 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
     int64_t N = W.size(0);
 
     if (!ocr_initialized || !k || !ocr_queue) {
-        // CPU fallback (ATen)
         return X.matmul(W.t()).add(B);
     }
 
@@ -267,6 +327,45 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
 
     clReleaseMemObject(dX);
     clReleaseMemObject(dY);
+    return out;
+}
+
+torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B, torch::Tensor bias) {
+    ensure_init();
+    auto a = A.contiguous().to(torch::kFloat32);
+    auto b = B.contiguous().to(torch::kFloat32);
+    auto bias_t = bias.contiguous().to(torch::kFloat32);
+
+    int64_t M = a.size(0);
+    int64_t K = a.size(1);
+    int64_t N = b.size(1);
+
+    if (!ocr_initialized || !k || !ocr_queue) {
+        return a.matmul(b).add(bias_t);
+    }
+
+    auto out = torch::empty({M, N}, torch::kFloat32);
+    const float* ap = a.data_ptr<float>();
+    const float* bp = b.data_ptr<float>();
+    const float* biasp = bias_t.data_ptr<float>();
+    float* op = out.data_ptr<float>();
+
+    cl_mem dA = alloc_buffer((size_t)M * K * sizeof(float));
+    cl_mem dB = alloc_buffer((size_t)K * N * sizeof(float));
+    cl_mem dBias = alloc_buffer((size_t)N * sizeof(float));
+    cl_mem dC = alloc_buffer((size_t)M * N * sizeof(float));
+
+    clEnqueueWriteBuffer(ocr_queue, dA, CL_TRUE, 0, (size_t)M * K * sizeof(float), ap, 0, nullptr, nullptr);
+    clEnqueueWriteBuffer(ocr_queue, dB, CL_TRUE, 0, (size_t)K * N * sizeof(float), bp, 0, nullptr, nullptr);
+    clEnqueueWriteBuffer(ocr_queue, dBias, CL_TRUE, 0, (size_t)N * sizeof(float), biasp, 0, nullptr, nullptr);
+    run_std_kernel(k, dA, dB, dBias, dC, (int)M, (int)N, (int)K);
+    clFinish(ocr_queue);
+    clEnqueueReadBuffer(ocr_queue, dC, CL_TRUE, 0, (size_t)M * N * sizeof(float), op, 0, nullptr, nullptr);
+
+    clReleaseMemObject(dA);
+    clReleaseMemObject(dB);
+    clReleaseMemObject(dBias);
+    clReleaseMemObject(dC);
     return out;
 }
 
@@ -306,6 +405,9 @@ void cleanup_ocl() {
     if (ocr_k_linear_tanh) clReleaseKernel(ocr_k_linear_tanh);
     if (ocr_k_relu) clReleaseKernel(ocr_k_relu);
     if (ocr_k_tanh) clReleaseKernel(ocr_k_tanh);
+    if (ocr_k_relu_bwd) clReleaseKernel(ocr_k_relu_bwd);
+    if (ocr_k_tanh_bwd) clReleaseKernel(ocr_k_tanh_bwd);
+    if (ocr_k_linear_bwd) clReleaseKernel(ocr_k_linear_bwd);
     if (ocr_queue) clReleaseCommandQueue(ocr_queue);
     if (ocr_ctx) clReleaseContext(ocr_ctx);
     ocr_k_linear = nullptr;
@@ -313,6 +415,9 @@ void cleanup_ocl() {
     ocr_k_linear_tanh = nullptr;
     ocr_k_relu = nullptr;
     ocr_k_tanh = nullptr;
+    ocr_k_relu_bwd = nullptr;
+    ocr_k_tanh_bwd = nullptr;
+    ocr_k_linear_bwd = nullptr;
     ocr_queue = nullptr;
     ocr_ctx = nullptr;
     ocr_initialized = false;
@@ -340,16 +445,98 @@ torch::Tensor tanh_forward(torch::Tensor input) {
     return unary_kernel_dispatch(ocr_k_tanh, input);
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> linear_backward(
+    torch::Tensor grad_output, torch::Tensor weight, torch::Tensor input) {
+    ensure_init();
+    auto go = grad_output.contiguous().to(torch::kFloat32);
+    auto W = weight.contiguous().to(torch::kFloat32);
+    auto X = input.contiguous().to(torch::kFloat32);
+
+    int64_t M = go.size(0);
+    int64_t N = W.size(1);
+    int64_t K = W.size(0);
+
+    auto zero_bias_n = torch::zeros({N}, torch::kFloat32);
+    auto zero_bias_k = torch::zeros({K}, torch::kFloat32);
+
+    // grad_input = go @ W  (M,N) @ (N,K) = (M,K)
+    auto grad_input = std_kernel_dispatch(ocr_k_linear_bwd, go, W, zero_bias_n);
+
+    // grad_weight = go.T @ X  (N,M) @ (M,K) = (N,K)
+    auto grad_weight = std_kernel_dispatch(ocr_k_linear_bwd, go.t(), X, zero_bias_k);
+
+    // grad_bias = go.sum(0) (N,)
+    auto grad_bias = go.sum(0);
+
+    return std::make_tuple(grad_input, grad_weight, grad_bias);
+}
+
+torch::Tensor relu_backward(torch::Tensor grad_output, torch::Tensor input) {
+    ensure_init();
+    auto go = grad_output.contiguous().to(torch::kFloat32);
+    auto X = input.contiguous().to(torch::kFloat32);
+    int64_t n = X.numel();
+    if (!ocr_initialized || !ocr_k_relu_bwd || !ocr_queue) {
+        auto mask = (X > 0).to(torch::kFloat32);
+        return go * mask;
+    }
+    auto out = torch::empty_like(go);
+    const float* gp = go.data_ptr<float>();
+    const float* xp = X.data_ptr<float>();
+    float* op = out.data_ptr<float>();
+    cl_mem dG = alloc_buffer((size_t)n * sizeof(float));
+    cl_mem dX = alloc_buffer((size_t)n * sizeof(float));
+    cl_mem dO = alloc_buffer((size_t)n * sizeof(float));
+    clEnqueueWriteBuffer(ocr_queue, dG, CL_TRUE, 0, (size_t)n * sizeof(float), gp, 0, nullptr, nullptr);
+    clEnqueueWriteBuffer(ocr_queue, dX, CL_TRUE, 0, (size_t)n * sizeof(float), xp, 0, nullptr, nullptr);
+    run_binary_unary_kernel(ocr_k_relu_bwd, dG, dX, dO, (int)n);
+    clFinish(ocr_queue);
+    clEnqueueReadBuffer(ocr_queue, dO, CL_TRUE, 0, (size_t)n * sizeof(float), op, 0, nullptr, nullptr);
+    clReleaseMemObject(dG);
+    clReleaseMemObject(dX);
+    clReleaseMemObject(dO);
+    return out;
+}
+
+torch::Tensor tanh_backward(torch::Tensor grad_output, torch::Tensor output) {
+    ensure_init();
+    auto go = grad_output.contiguous().to(torch::kFloat32);
+    auto Y = output.contiguous().to(torch::kFloat32);
+    int64_t n = Y.numel();
+    if (!ocr_initialized || !ocr_k_tanh_bwd || !ocr_queue) {
+        return go * (1.0f - Y * Y);
+    }
+    auto out = torch::empty_like(go);
+    const float* gp = go.data_ptr<float>();
+    const float* yp = Y.data_ptr<float>();
+    float* op = out.data_ptr<float>();
+    cl_mem dG = alloc_buffer((size_t)n * sizeof(float));
+    cl_mem dY = alloc_buffer((size_t)n * sizeof(float));
+    cl_mem dO = alloc_buffer((size_t)n * sizeof(float));
+    clEnqueueWriteBuffer(ocr_queue, dG, CL_TRUE, 0, (size_t)n * sizeof(float), gp, 0, nullptr, nullptr);
+    clEnqueueWriteBuffer(ocr_queue, dY, CL_TRUE, 0, (size_t)n * sizeof(float), yp, 0, nullptr, nullptr);
+    run_binary_unary_kernel(ocr_k_tanh_bwd, dG, dY, dO, (int)n);
+    clFinish(ocr_queue);
+    clEnqueueReadBuffer(ocr_queue, dO, CL_TRUE, 0, (size_t)n * sizeof(float), op, 0, nullptr, nullptr);
+    clReleaseMemObject(dG);
+    clReleaseMemObject(dY);
+    clReleaseMemObject(dO);
+    return out;
+}
+
 PYBIND11_MODULE(opencl_ocl, m) {
-    m.doc() = "PyTorch OpenCL custom operator extension (torch::Tensor API, tiled GEMM + fused activations)";
+    m.doc() = "PyTorch OpenCL custom operator extension (torch::Tensor API, tiled GEMM + fused activations + backward)";
 
     m.def("linear_forward", &linear_forward, "Linear forward (OpenCL, Y = X@W^T + B)");
     m.def("linear_relu_forward", &linear_relu_forward, "Fused Linear + ReLU (OpenCL)");
     m.def("linear_tanh_forward", &linear_tanh_forward, "Fused Linear + Tanh (OpenCL)");
     m.def("relu_forward", &relu_forward, "ReLU forward (OpenCL)");
     m.def("tanh_forward", &tanh_forward, "Tanh forward (OpenCL)");
+    m.def("linear_backward", &linear_backward, "Linear backward (OpenCL)");
+    m.def("relu_backward", &relu_backward, "ReLU backward (OpenCL)");
+    m.def("tanh_backward", &tanh_backward, "Tanh backward (OpenCL)");
     m.def("cleanup", &cleanup_ocl, "Cleanup OpenCL resources");
     m.def("is_available", []() { ensure_init(); return ocr_initialized; }, "Check if OpenCL is available");
 
-    m.attr("__library_version__") = "opencl_ocl-2.2.0";
+    m.attr("__library_version__") = "opencl_ocl-2.3.0";
 }
