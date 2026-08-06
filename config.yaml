@@ -11,7 +11,7 @@ clip: 0.2
 entropy_coef: 0.01
 vf_coef: 0.5
 laser_range: 2.0
-laser_speed: 0.5
+laser_speed: 0.05
 laser_activate_after: 100
 hidden: 256
 opencl_min_elements: 8192
