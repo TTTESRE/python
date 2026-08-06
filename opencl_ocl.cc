@@ -456,16 +456,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> linear_backward(
     int64_t N = W.size(1);
     int64_t K = W.size(0);
 
-    auto zero_bias_n = torch::zeros({N}, torch::kFloat32);
-    auto zero_bias_k = torch::zeros({K}, torch::kFloat32);
+    auto zero_bias = torch::zeros({N}, torch::kFloat32);
 
-    // grad_input = go @ W  (M,N) @ (N,K) = (M,K)
-    auto grad_input = std_kernel_dispatch(ocr_k_linear_bwd, go, W, zero_bias_n);
+    // grad_input = go @ W  (M, output) @ (output, input) = (M, input)
+    auto grad_input = std_kernel_dispatch(ocr_k_linear_bwd, go, W, zero_bias);
 
-    // grad_weight = go.T @ X  (N,M) @ (M,K) = (N,K)
-    auto grad_weight = std_kernel_dispatch(ocr_k_linear_bwd, go.t(), X, zero_bias_k);
+    // grad_weight = go.T @ X  (output, M) @ (M, input) = (output, input)
+    auto grad_weight = std_kernel_dispatch(ocr_k_linear_bwd, go.t(), X, zero_bias);
 
-    // grad_bias = go.sum(0) (N,)
+    // grad_bias = go.sum(0) (output,)
     auto grad_bias = go.sum(0);
 
     return std::make_tuple(grad_input, grad_weight, grad_bias);

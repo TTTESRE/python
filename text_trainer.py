@@ -15,6 +15,9 @@ import signal
 import subprocess
 import yaml
 import numpy as np
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
 import pygame
 import gymnasium as gym
 import torch

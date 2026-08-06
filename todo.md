@@ -20,9 +20,9 @@
 
 ## Low Priority / Later
 
-- [ ] Implement OpenCL backward kernels (optional, high effort)
-- [ ] Hyperparameter config file instead of hardcoded values
-- [ ] Support multiple parallel environments
+- [x] Implement OpenCL backward kernels (optional, high effort)
+- [x] Hyperparameter config file instead of hardcoded values
+- [x] Support multiple parallel environments
 - [ ] Strip unused libtorch dependency **or** fully embrace it (current choice: embrace it)
 
 ## Notes
