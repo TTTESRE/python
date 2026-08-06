@@ -1,1 +1,4 @@
 pytorch_dlprim-master/
+walker_checkpoint.pt
+build/
+pngsignore/

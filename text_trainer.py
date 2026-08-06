@@ -50,13 +50,18 @@ def load_config(path=None):
         "laser_activate_after": 100,
         "hidden": 128,
         "opencl_min_elements": 8192,
+        "compute_chain": ["opencl", "aten"],
         "fps": 30,
         "record_video_container": "webm",
     }
     if os.path.exists(path):
         with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
-        defaults.update({k: v for k, v in data.items() if v is not None})
+        for k, v in data.items():
+            if k == "compute_chain" and isinstance(v, str):
+                defaults[k] = [s.strip() for s in v.split(",") if s.strip()]
+            elif v is not None:
+                defaults[k] = v
     return defaults
 
 
@@ -70,10 +75,8 @@ class OpenCLLinear(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, weight, bias = ctx.saved_tensors
-        grad_input = grad_output @ weight
-        grad_weight = grad_output.t() @ input
-        grad_bias = grad_output.sum(dim=0)
-        return grad_input, grad_weight, grad_bias
+        grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(grad_output.detach(), weight.detach(), input.detach())
+        return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
 class OpenCLReLU(torch.autograd.Function):
@@ -86,9 +89,8 @@ class OpenCLReLU(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors
-        mask = (input > 0).float()
-        grad_input = grad_output * mask
-        return grad_input
+        grad_input = opencl_ocl.relu_backward(grad_output.detach(), input.detach())
+        return grad_input.to(device=input.device, dtype=input.dtype)
 
 
 class OpenCLTanh(torch.autograd.Function):
@@ -101,8 +103,8 @@ class OpenCLTanh(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, output = ctx.saved_tensors
-        grad_input = grad_output * (1 - output ** 2)
-        return grad_input
+        grad_input = opencl_ocl.tanh_backward(grad_output.detach(), output.detach())
+        return grad_input.to(device=input.device, dtype=input.dtype)
 
 
 class OpenCLLinearReLU(torch.autograd.Function):
@@ -118,10 +120,8 @@ class OpenCLLinearReLU(torch.autograd.Function):
         pre = input @ weight.t() + bias
         mask = (pre > 0).float()
         g = grad_output * mask
-        grad_input = g @ weight
-        grad_weight = g.t() @ input
-        grad_bias = g.sum(dim=0)
-        return grad_input, grad_weight, grad_bias
+        grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(g.detach(), weight.detach(), input.detach())
+        return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
 class OpenCLLinearTanh(torch.autograd.Function):
@@ -135,66 +135,113 @@ class OpenCLLinearTanh(torch.autograd.Function):
     def backward(ctx, grad_output):
         input, weight, bias, output = ctx.saved_tensors
         d = grad_output * (1 - output ** 2)
-        grad_input = d @ weight
-        grad_weight = d.t() @ input
-        grad_bias = d.sum(dim=0)
-        return grad_input, grad_weight, grad_bias
+        grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(d.detach(), weight.detach(), input.detach())
+        return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
 # Only dispatch to OpenCL when the op is big enough to amortise the
 # host<->device copies. Otherwise fall straight through to ATen (CPU), which is
 # faster for small matrices.
 _OCL_MIN_ELEMENTS = 8192
+_compute_chain = ["opencl", "aten"]
+
+
+def set_compute_chain(chain):
+    global _compute_chain
+    if isinstance(chain, str):
+        chain = [s.strip() for s in chain.split(",") if s.strip()]
+    _compute_chain = list(chain)
+
+
+def _try_opencl_linear(x, w, b):
+    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+        return OpenCLLinear.apply(x, w, b)
+    return None
+
+
+def _try_opencl_linear_relu(x, w, b):
+    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+        return OpenCLLinearReLU.apply(x, w, b)
+    return None
+
+
+def _try_opencl_linear_tanh(x, w, b):
+    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+        return OpenCLLinearTanh.apply(x, w, b)
+    return None
+
+
+def _try_opencl_relu(x):
+    if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
+        return OpenCLReLU.apply(x)
+    return None
+
+
+def _try_opencl_tanh(x):
+    if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
+        return OpenCLTanh.apply(x)
+    return None
 
 
 def ocl_linear(x, w, b):
-    try:
-        if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-            return OpenCLLinear.apply(x, w, b)
-    except Exception:
-        pass
+    for backend in _compute_chain:
+        if backend == "opencl":
+            r = _try_opencl_linear(x, w, b)
+            if r is not None:
+                return r
+        elif backend in ("aten", "cpu"):
+            return torch.nn.functional.linear(x, w, b)
     return torch.nn.functional.linear(x, w, b)
 
 
 def ocl_relu(x):
-    try:
-        if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
-            return OpenCLReLU.apply(x)
-    except Exception:
-        pass
+    for backend in _compute_chain:
+        if backend == "opencl":
+            r = _try_opencl_relu(x)
+            if r is not None:
+                return r
+        elif backend in ("aten", "cpu"):
+            return torch.nn.functional.relu(x)
     return torch.nn.functional.relu(x)
 
 
 def ocl_tanh(x):
-    try:
-        if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
-            return OpenCLTanh.apply(x)
-    except Exception:
-        pass
+    for backend in _compute_chain:
+        if backend == "opencl":
+            r = _try_opencl_tanh(x)
+            if r is not None:
+                return r
+        elif backend in ("aten", "cpu"):
+            return torch.tanh(x)
     return torch.tanh(x)
 
 
 def ocl_linear_relu(x, w, b):
-    try:
-        if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-            return OpenCLLinearReLU.apply(x, w, b)
-    except Exception:
-        pass
+    for backend in _compute_chain:
+        if backend == "opencl":
+            r = _try_opencl_linear_relu(x, w, b)
+            if r is not None:
+                return r
+        elif backend in ("aten", "cpu"):
+            return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
     return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
 
 
 def ocl_linear_tanh(x, w, b):
-    try:
-        if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-            return OpenCLLinearTanh.apply(x, w, b)
-    except Exception:
-        pass
+    for backend in _compute_chain:
+        if backend == "opencl":
+            r = _try_opencl_linear_tanh(x, w, b)
+            if r is not None:
+                return r
+        elif backend in ("aten", "cpu"):
+            return torch.tanh(torch.nn.functional.linear(x, w, b))
     return torch.tanh(torch.nn.functional.linear(x, w, b))
 
 
 class PolicyNet(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden=128):
         super().__init__()
+        self.hidden = hidden
         self.fc1 = nn.Linear(obs_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
         self.fc_mean = nn.Linear(hidden, act_dim)
@@ -211,6 +258,7 @@ class PolicyNet(nn.Module):
 class ValueNet(nn.Module):
     def __init__(self, obs_dim, hidden=128):
         super().__init__()
+        self.hidden = hidden
         self.fc1 = nn.Linear(obs_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
         self.fc3 = nn.Linear(hidden, 1)
@@ -222,10 +270,10 @@ class ValueNet(nn.Module):
 
 
 class PPOAgent:
-    def __init__(self, obs_dim, act_dim, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2, entropy_coef=0.01, vf_coef=0.5):
+    def __init__(self, obs_dim, act_dim, hidden=128, lr=3e-4, gamma=0.99, lam=0.95, clip=0.2, entropy_coef=0.01, vf_coef=0.5):
         self.device = torch.device("cpu")
-        self.policy = PolicyNet(obs_dim, act_dim).to(self.device)
-        self.value = ValueNet(obs_dim).to(self.device)
+        self.policy = PolicyNet(obs_dim, act_dim, hidden=hidden).to(self.device)
+        self.value = ValueNet(obs_dim, hidden=hidden).to(self.device)
         self.optimizer = torch.optim.Adam(
             list(self.policy.parameters()) + list(self.value.parameters()),
             lr=lr
@@ -237,16 +285,23 @@ class PPOAgent:
         self.vf_coef = vf_coef
 
     def get_action(self, obs):
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)
         with torch.no_grad():
             mean = self.policy(obs)
             std = torch.exp(self.policy.fc_logstd)
             dist = torch.distributions.Normal(mean, std)
             action = dist.sample()
             action = torch.clamp(action, -1.0, 1.0)
-            logp = dist.log_prob(action).sum(dim=-1, keepdim=True)
-            value = self.value(obs)
-        return action.cpu().numpy()[0], logp.cpu().item(), value.cpu().item()
+            logp = dist.log_prob(action).sum(dim=-1)
+            value = self.value(obs).squeeze(-1)
+        action_np = action.cpu().numpy()
+        logp_np = logp.cpu().numpy()
+        value_np = value.cpu().numpy()
+        if action_np.shape[0] == 1:
+            return action_np[0], logp_np[0], value_np[0]
+        return action_np, logp_np, value_np
 
     def compute_returns(self, trajectories, last_value):
         """Generalized Advantage Estimation (GAE-lambda).
@@ -269,7 +324,7 @@ class PPOAgent:
                 next_done = trajectories[t]["done"]
             else:
                 next_val = trajectories[t + 1]["val"]
-                next_done = trajectories[t + 1]["done"]
+                next_done = trajectories[t]["done"]
             nonterminal = 0.0 if next_done else 1.0
             delta = trajectories[t]["rew"] + self.gamma * next_val * nonterminal - trajectories[t]["val"]
             gae = delta + self.gamma * self.lam * nonterminal * gae
@@ -280,11 +335,11 @@ class PPOAgent:
     def update(self, trajectories):
         if len(trajectories) == 0:
             return 0.0, 0.0, 0.0
-        obs = torch.tensor([t["obs"] for t in trajectories], dtype=torch.float32, device=self.device)
-        acts = torch.tensor([t["act"] for t in trajectories], dtype=torch.float32, device=self.device)
-        old_logp = torch.tensor([t["logp"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
-        returns = torch.tensor([t["ret"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
-        advantages = torch.tensor([t["adv"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
+        obs = torch.as_tensor(np.stack([t["obs"] for t in trajectories]), dtype=torch.float32, device=self.device)
+        acts = torch.as_tensor(np.stack([t["act"] for t in trajectories]), dtype=torch.float32, device=self.device)
+        old_logp = torch.as_tensor([t["logp"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
+        returns = torch.as_tensor([t["ret"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
+        advantages = torch.as_tensor([t["adv"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         mean = self.policy(obs)
@@ -310,11 +365,12 @@ class PPOAgent:
 
 
 class LaserHazardWrapper(gym.Wrapper):
-    def __init__(self, env, laser_speed=0.5, laser_range=2.0):
+    def __init__(self, env, laser_speed=0.5, laser_range=2.0, laser_activate_after=100):
         super().__init__(env)
         self.laser_pos = -5
-        self.laser_speed = 0.075
+        self.laser_speed = laser_speed
         self.laser_range = laser_range
+        self.laser_activate_after = laser_activate_after
         self.laser_direction = 1.0
         self.laser_active = False
         self.step_count = 0
@@ -327,7 +383,6 @@ class LaserHazardWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.laser_pos = -5
-        self.laser_speed = 0.075
         self.laser_direction = 1.0
         self.laser_active = False
         self.step_count = 0
@@ -339,7 +394,7 @@ class LaserHazardWrapper(gym.Wrapper):
         self.step_count += 1
         self.current_score += reward
 
-        if self.step_count > 100:
+        if self.step_count > self.laser_activate_after:
             self.laser_active = True
 
         if self.laser_active:
@@ -426,6 +481,14 @@ class WalkerTrainer:
         self.fix_mode = mode.startswith("fix")
         self.headless = mode in ("run", "fixrun", "train", "fixtrain")
         self.record_video = mode in ("run", "fixrun")
+        self.num_envs = int(cfg.get("num_envs", 1))
+        if self.record_video:
+            self.num_envs = 1
+        compute_chain = cfg.get("compute_chain", ["opencl", "aten"])
+        if isinstance(compute_chain, str):
+            compute_chain = [s.strip() for s in compute_chain.split(",") if s.strip()]
+        self.compute_chain = compute_chain
+        set_compute_chain(compute_chain)
         self.render = mode in ("run", "runtrain", "fixrun", "fixruntrain", "fixtrain")
         self.video_path = video_path or ("run_inference.webm" if container == "webm" else "run_inference.mp4")
         self.container = container
@@ -433,15 +496,37 @@ class WalkerTrainer:
         self.fixer_proc = None
         self.fixer_opencl_proc = None
 
-        self.env = gym.make(self.env_name, render_mode="rgb_array")
-        self.env = LaserHazardWrapper(self.env, laser_range=float(cfg.get("laser_range", 2.0)))
-        self.env.headless = self.headless
-        obs_dim = self.env.observation_space.shape[0]
-        act_dim = self.env.action_space.shape[0]
+        def make_env():
+            e = gym.make(self.env_name, render_mode="rgb_array")
+            e = LaserHazardWrapper(
+                e,
+                laser_speed=float(cfg.get("laser_speed", 0.5)),
+                laser_range=float(cfg.get("laser_range", 2.0)),
+                laser_activate_after=int(cfg.get("laser_activate_after", 100))
+            )
+            e.headless = self.headless
+            return e
 
+        if self.num_envs > 1:
+            try:
+                self.env = gym.vector.SyncVectorEnv([make_env for _ in range(self.num_envs)])
+            except Exception as e:
+                print(f"[vec] SyncVectorEnv failed ({e}), falling back to single env")
+                self.num_envs = 1
+                self.env = make_env()
+        else:
+            self.env = make_env()
+
+        obs_space = self.env.observation_space.shape
+        act_space = self.env.action_space.shape
+        self.obs_dim = obs_space[-1]
+        self.act_dim = act_space[-1]
+
+        hidden = int(cfg.get("hidden", 128))
         self.agent = PPOAgent(
-            obs_dim,
-            act_dim,
+            self.obs_dim,
+            self.act_dim,
+            hidden=hidden,
             lr=float(cfg.get("lr", 3e-4)),
             gamma=float(cfg.get("gamma", 0.99)),
             lam=float(cfg.get("lam", 0.95)),
@@ -633,89 +718,19 @@ class WalkerTrainer:
             return
         self.load()
         obs, _ = self.env.reset()
-        episode_reward = 0.0
-        episode_steps = 0
-        trajectories = []
-        total_steps = 0
 
         print(f"OpenCL available: {opencl_ocl.is_available()}")
         print(f"Environment: {self.env_name}")
-        print(f"Observation dim: {self.env.observation_space.shape[0]}")
-        print(f"Action dim: {self.env.action_space.shape[0]}")
+        print(f"Observation dim: {self.obs_dim}")
+        print(f"Action dim: {self.act_dim}")
+        print(f"Num envs: {self.num_envs}")
         print(f"Starting training from episode {self.episode}...")
 
         try:
-            while self.episode < self.max_episodes:
-                action, logp, value = self.agent.get_action(obs)
-                next_obs, reward, terminated, truncated, _ = self.env.step(action)
-                done = terminated or truncated
-
-                if self.render:
-                    frame = self.env.render()
-                    if self.record_video and frame is not None:
-                        if self.ffmpeg_proc is None:
-                            self._start_video(np.asarray(frame))
-                        self._write_frame(np.asarray(frame))
-
-                trajectories.append({
-                    "obs": obs.astype(np.float32),
-                    "act": action.astype(np.float32),
-                    "logp": float(logp),
-                    "rew": float(reward),
-                    "val": float(value),
-                    "done": done,
-                })
-
-                episode_reward += reward
-                episode_steps += 1
-                obs = next_obs
-                total_steps += 1
-
-                if done or episode_steps >= self.max_steps:
-                    self.episode += 1
-                    laser_info = ""
-                    laser_speed = 0.0
-                    if hasattr(self.env, 'env') and hasattr(self.env.env, 'laser_active'):
-                        laser_speed = self.env.env.laser_speed
-                        laser_info = f" | Laser spd={laser_speed:.2f}"
-                    avg = self._log_episode(self.episode, episode_reward, episode_steps, laser_speed)
-                    print(f"Episode {self.episode:4d} | Reward: {episode_reward:8.2f} | Avg50: {avg:7.2f} | Steps: {episode_steps:4d}{laser_info}")
-
-                    if episode_reward > self.best_reward:
-                        self.best_reward = episode_reward
-                        torch.save({
-                            "policy": self.agent.policy.state_dict(),
-                            "value": self.agent.value.state_dict(),
-                            "optimizer": self.agent.optimizer.state_dict(),
-                            "episode": self.episode,
-                            "best_reward": self.best_reward,
-                        }, "best_walker.pt")
-                        print(f"  New best reward! Saved to best_walker.pt")
-
-                    if episode_reward >= 300.0:
-                        print(f"Solved in episode {self.episode}!")
-                        break
-
-                    obs, _ = self.env.reset()
-                    episode_reward = 0.0
-                    episode_steps = 0
-
-                if len(trajectories) >= self.update_interval:
-                    last_value = 0.0
-                    if not done:
-                        _, _, last_value = self.agent.get_action(obs)
-                    rets, advs = self.agent.compute_returns(trajectories, last_value)
-                    for t, r, a in zip(trajectories, rets, advs):
-                        t["ret"] = r
-                        t["adv"] = a
-
-                    for _ in range(self.epochs_per_update):
-                        np.random.shuffle(trajectories)
-                        for start in range(0, len(trajectories), self.mini_batch_size):
-                            batch = trajectories[start:start + self.mini_batch_size]
-                            self.agent.update(batch)
-                    trajectories = []
-
+            if self.num_envs <= 1:
+                self._train_single(obs)
+            else:
+                self._train_vectorized(obs)
         except KeyboardInterrupt:
             pass
 
@@ -725,25 +740,201 @@ class WalkerTrainer:
         self.save()
         print("Training finished.")
 
+    def _train_single(self, obs):
+        episode_reward = 0.0
+        episode_steps = 0
+        trajectories = []
+        total_steps = 0
+
+        while self.episode < self.max_episodes:
+            action, logp, value = self.agent.get_action(obs)
+            next_obs, reward, terminated, truncated, _ = self.env.step(action)
+            done = terminated or truncated
+
+            if self.render:
+                frame = self.env.render()
+                if self.record_video and frame is not None:
+                    if self.ffmpeg_proc is None:
+                        self._start_video(np.asarray(frame))
+                    self._write_frame(np.asarray(frame))
+
+            trajectories.append({
+                "obs": obs.astype(np.float32),
+                "act": action.astype(np.float32),
+                "logp": float(logp),
+                "rew": float(reward),
+                "val": float(value),
+                "done": done,
+            })
+
+            episode_reward += reward
+            episode_steps += 1
+            obs = next_obs
+            total_steps += 1
+
+            if done or episode_steps >= self.max_steps:
+                self.episode += 1
+        laser_info = ""
+        laser_speed = 0.0
+        if hasattr(self.env, 'env') and hasattr(self.env.env, 'laser_speed'):
+            laser_speed = self.env.env.laser_speed
+            laser_info = f" | Laser spd={laser_speed:.2f}"
+                avg = self._log_episode(self.episode, episode_reward, episode_steps, laser_speed)
+                print(f"Episode {self.episode:4d} | Reward: {episode_reward:8.2f} | Avg50: {avg:7.2f} | Steps: {episode_steps:4d}{laser_info}")
+
+                if episode_reward > self.best_reward:
+                    self.best_reward = episode_reward
+                    torch.save({
+                        "policy": self.agent.policy.state_dict(),
+                        "value": self.agent.value.state_dict(),
+                        "optimizer": self.agent.optimizer.state_dict(),
+                        "episode": self.episode,
+                        "best_reward": self.best_reward,
+                    }, "best_walker.pt")
+                    print(f"  New best reward! Saved to best_walker.pt")
+
+                if episode_reward >= 300.0:
+                    print(f"Solved in episode {self.episode}!")
+                    break
+
+                obs, _ = self.env.reset()
+                episode_reward = 0.0
+                episode_steps = 0
+
+            if len(trajectories) >= self.update_interval:
+                last_value = 0.0
+                if not done:
+                    _, _, last_value = self.agent.get_action(obs)
+                rets, advs = self.agent.compute_returns(trajectories, last_value)
+                for t, r, a in zip(trajectories, rets, advs):
+                    t["ret"] = r
+                    t["adv"] = a
+
+                t0 = time.perf_counter()
+                for _ in range(self.epochs_per_update):
+                    np.random.shuffle(trajectories)
+                    for start in range(0, len(trajectories), self.mini_batch_size):
+                        batch = trajectories[start:start + self.mini_batch_size]
+                        self.agent.update(batch)
+                dt = time.perf_counter() - t0
+                print(f"  [update] {self.epochs_per_update} epochs over {len(trajectories)} steps in {dt:.2f}s")
+                trajectories.clear()
+
+    def _train_vectorized(self, obs):
+        ep_rewards = np.zeros(self.num_envs)
+        ep_steps = np.zeros(self.num_envs, dtype=int)
+        trajectories = [[] for _ in range(self.num_envs)]
+        total_steps = 0
+
+        while self.episode < self.max_episodes:
+            actions, logps, values = self.agent.get_action(obs)
+            next_obs, rewards, terminateds, truncateds, infos = self.env.step(actions)
+            dones = np.logical_or(terminateds, truncateds)
+
+            if self.render:
+                frame = self.env.render()
+                if self.record_video and frame is not None:
+                    if self.ffmpeg_proc is None:
+                        self._start_video(np.asarray(frame))
+                    self._write_frame(np.asarray(frame))
+
+            for i in range(self.num_envs):
+                trajectories[i].append({
+                    "obs": obs[i].astype(np.float32),
+                    "act": actions[i].astype(np.float32),
+                    "logp": float(logps[i]),
+                    "rew": float(rewards[i]),
+                    "val": float(values[i]),
+                    "done": bool(dones[i]),
+                })
+
+            ep_rewards += rewards
+            ep_steps += 1
+            total_steps += self.num_envs
+            obs = next_obs
+
+            for i in range(self.num_envs):
+                if dones[i]:
+                    self.episode += 1
+                    laser_info = ""
+                    laser_speed = 0.0
+                    if hasattr(self.env, 'envs') and i < len(self.env.envs):
+                        env_i = self.env.envs[i]
+                        if hasattr(env_i, 'env') and hasattr(env_i.env, 'laser_speed'):
+                            laser_speed = env_i.env.laser_speed
+                            laser_info = f" | Laser spd={laser_speed:.2f}"
+                    avg = self._log_episode(self.episode, float(ep_rewards[i]), int(ep_steps[i]), laser_speed)
+                    print(f"Episode {self.episode:4d} | Reward: {ep_rewards[i]:8.2f} | Avg50: {avg:7.2f} | Steps: {ep_steps[i]:4d}{laser_info}")
+
+                    if ep_rewards[i] > self.best_reward:
+                        self.best_reward = ep_rewards[i]
+                        torch.save({
+                            "policy": self.agent.policy.state_dict(),
+                            "value": self.agent.value.state_dict(),
+                            "optimizer": self.agent.optimizer.state_dict(),
+                            "episode": self.episode,
+                            "best_reward": self.best_reward,
+                        }, "best_walker.pt")
+                        print(f"  New best reward! Saved to best_walker.pt")
+
+                    ep_rewards[i] = 0.0
+                    ep_steps[i] = 0
+
+            total_in_buffer = sum(len(t) for t in trajectories)
+            if total_in_buffer >= self.update_interval:
+                flat_trajectories = []
+                for traj in trajectories:
+                    flat_trajectories.extend(traj)
+
+                last_values = np.zeros(self.num_envs)
+                for i in range(self.num_envs):
+                    if trajectories[i] and not trajectories[i][-1]["done"]:
+                        _, _, lv = self.agent.get_action(obs[i])
+                        last_values[i] = float(lv)
+
+                for i, traj in enumerate(trajectories):
+                    if len(traj) == 0:
+                        continue
+                    rets, advs = self.agent.compute_returns(traj, last_values[i])
+                    for t, r, a in zip(traj, rets, advs):
+                        t["ret"] = r
+                        t["adv"] = a
+
+                t0 = time.perf_counter()
+                for _ in range(self.epochs_per_update):
+                    np.random.shuffle(flat_trajectories)
+                    for start in range(0, len(flat_trajectories), self.mini_batch_size):
+                        batch = flat_trajectories[start:start + self.mini_batch_size]
+                        self.agent.update(batch)
+                dt = time.perf_counter() - t0
+                print(f"  [update] {self.epochs_per_update} epochs over {len(flat_trajectories)} steps in {dt:.2f}s")
+
+                trajectories = [[] for _ in range(self.num_envs)]
+                obs, _ = self.env.reset()
+                obs, _ = self.env.reset()
+
     def _run_inference(self):
         ckpt_path = "best_walker.pt"
         if not os.path.exists(ckpt_path):
             print("No checkpoint found at best_walker.pt. Run --train first.")
             return
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        self.agent.policy.load_state_dict(ckpt["policy"])
-        self.agent.value.load_state_dict(ckpt["value"])
+        try:
+            self.agent.policy.load_state_dict(ckpt["policy"])
+            self.agent.value.load_state_dict(ckpt["value"])
+        except RuntimeError as e:
+            print(f"[run] Architecture changed ({e}); cannot run inference with mismatched model")
+            return
         print(f"Loaded best checkpoint (best reward: {ckpt.get('best_reward', 'N/A')})")
 
         obs, _ = self.env.reset()
         episode_reward = 0.0
         episode_steps = 0
         episode = 0
-        max_episodes = 10
 
-        print(f"Running inference for {max_episodes} episodes...")
+        print(f"Running inference for {self.max_episodes} episodes...")
         try:
-            while episode < max_episodes:
+            while episode < self.max_episodes:
                 action, logp, value = self.agent.get_action(obs)
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated

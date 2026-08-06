@@ -1,3 +1,0 @@
-/home/user/aithis/python/build/CMakeFiles/opencl_ocl.dir
-/home/user/aithis/python/build/CMakeFiles/edit_cache.dir
-/home/user/aithis/python/build/CMakeFiles/rebuild_cache.dir

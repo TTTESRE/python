@@ -1,4 +1,6 @@
 #include <torch/extension.h>
+// Tiled SGEMM kernel adapted from dlprimitives (MIT License, Artyom Beilis)
+// https://github.com/artyom-beilis/dlprimitives
 
 #include <CL/cl.h>
 
@@ -32,6 +34,7 @@ cl_kernel ocr_k_linear_bwd = nullptr;
 bool ocr_initialized = false;
 
 std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
+std::unordered_map<size_t, cl_mem> g_buf_cache;
 
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
@@ -237,9 +240,25 @@ cl_mem get_param_buffer(const float* host, size_t nbytes) {
 }
 
 cl_mem alloc_buffer(size_t nbytes) {
+    auto it = g_buf_cache.find(nbytes);
+    if (it != g_buf_cache.end()) {
+        cl_mem buf = it->second;
+        g_buf_cache.erase(it);
+        return buf;
+    }
     cl_mem buf = clCreateBuffer(ocr_ctx, CL_MEM_READ_WRITE, nbytes, nullptr, nullptr);
     if (!buf) throw std::runtime_error("Failed to allocate OpenCL buffer");
     return buf;
+}
+
+void release_buffer(cl_mem buf) {
+    size_t nbytes = 0;
+    clGetMemObjectInfo(buf, CL_MEM_SIZE, sizeof(size_t), &nbytes, nullptr);
+    if (nbytes > 0) {
+        g_buf_cache[nbytes] = buf;
+    } else {
+        clReleaseMemObject(buf);
+    }
 }
 
 void run_linear_kernel(cl_kernel k, cl_mem dW, cl_mem dX, cl_mem dB, cl_mem dY, int M, int N, int K) {
@@ -325,8 +344,8 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dY, CL_TRUE, 0, (size_t)M * N * sizeof(float), op, 0, nullptr, nullptr);
 
-    clReleaseMemObject(dX);
-    clReleaseMemObject(dY);
+    release_buffer(dX);
+    release_buffer(dY);
     return out;
 }
 
@@ -362,10 +381,10 @@ torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B,
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dC, CL_TRUE, 0, (size_t)M * N * sizeof(float), op, 0, nullptr, nullptr);
 
-    clReleaseMemObject(dA);
-    clReleaseMemObject(dB);
-    clReleaseMemObject(dBias);
-    clReleaseMemObject(dC);
+    release_buffer(dA);
+    release_buffer(dB);
+    release_buffer(dBias);
+    release_buffer(dC);
     return out;
 }
 
@@ -391,8 +410,8 @@ torch::Tensor unary_kernel_dispatch(cl_kernel k, torch::Tensor input) {
     run_unary_kernel(k, dX, dY, (int)n);
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dY, CL_TRUE, 0, (size_t)n * sizeof(float), op, 0, nullptr, nullptr);
-    clReleaseMemObject(dX);
-    clReleaseMemObject(dY);
+    release_buffer(dX);
+    release_buffer(dY);
     return out;
 }
 
@@ -400,6 +419,8 @@ void cleanup_ocl() {
     if (!ocr_initialized) return;
     for (auto& kv : g_param_cache) clReleaseMemObject(kv.second.first);
     g_param_cache.clear();
+    for (auto& kv : g_buf_cache) clReleaseMemObject(kv.second);
+    g_buf_cache.clear();
     if (ocr_k_linear) clReleaseKernel(ocr_k_linear);
     if (ocr_k_linear_relu) clReleaseKernel(ocr_k_linear_relu);
     if (ocr_k_linear_tanh) clReleaseKernel(ocr_k_linear_tanh);
@@ -491,9 +512,9 @@ torch::Tensor relu_backward(torch::Tensor grad_output, torch::Tensor input) {
     run_binary_unary_kernel(ocr_k_relu_bwd, dG, dX, dO, (int)n);
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dO, CL_TRUE, 0, (size_t)n * sizeof(float), op, 0, nullptr, nullptr);
-    clReleaseMemObject(dG);
-    clReleaseMemObject(dX);
-    clReleaseMemObject(dO);
+    release_buffer(dG);
+    release_buffer(dX);
+    release_buffer(dO);
     return out;
 }
 
@@ -517,9 +538,9 @@ torch::Tensor tanh_backward(torch::Tensor grad_output, torch::Tensor output) {
     run_binary_unary_kernel(ocr_k_tanh_bwd, dG, dY, dO, (int)n);
     clFinish(ocr_queue);
     clEnqueueReadBuffer(ocr_queue, dO, CL_TRUE, 0, (size_t)n * sizeof(float), op, 0, nullptr, nullptr);
-    clReleaseMemObject(dG);
-    clReleaseMemObject(dY);
-    clReleaseMemObject(dO);
+    release_buffer(dG);
+    release_buffer(dY);
+    release_buffer(dO);
     return out;
 }
 

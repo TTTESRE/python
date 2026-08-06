@@ -4,58 +4,52 @@
 
 BipedalWalker-v3 PPO trainer with:
 - Custom laser hazard wrapper
-- Experimental OpenCL acceleration for network forward pass
+- OpenCL acceleration for network forward and backward via libtorch tensors
 - Optional pygame rendering + ffmpeg video recording
-- External "fixer" process that forces display updates via GDB
+- External fixers: `fixer` (force pygame flips) and `fixer_opencl` (validate GEMM, force CPU fallback on mismatch)
+- Config-driven hyperparameters (`config.yaml`)
+- Optional SyncVectorEnv parallel environments
+- CSV + TensorBoard logging
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `text_trainer.py` | Main training / inference loop, PPO agent, LaserHazardWrapper |
-| `opencl_ocl.cc` | Custom OpenCL kernels (Linear, ReLU, Tanh) + pybind11 bindings |
+| `text_trainer.py` | Main training / inference loop, PPO agent, LaserHazardWrapper, OpenCL dispatch |
+| `opencl_ocl.cc` | OpenCL kernels (tiled SGEMM, fused Linear+ReLU/Tanh, ReLU/Tanh, backward) + pybind11 |
 | `setup_ocl.py` | Builds the OpenCL extension with CMake + libtorch |
-| `CMakeLists.txt` | CMake config (finds Torch, OpenCL, pybind11) |
-| `fixer.cc` | Forces pygame flips by attaching GDB to the Python process |
-| `best_walker.pt` | Saved best policy/value checkpoint |
-| `generate.py` | Unrelated leftover (CharCNN text generation) |
+| `CMakeLists.txt` | CMake config (Torch, torch_python, OpenCL, pybind11) |
+| `config.yaml` | Hyperparameters (episodes, lr, laser, hidden, num_envs, compute_chain, …) |
+| `fixer.cc` | Forces pygame `display.flip()` + `event.pump()` via GDB every 33ms |
+| `fixer_opencl.cc` | Validates OpenCL vs CPU every 1s; calls `cleanup()` on mismatch |
+| `best_walker.pt` / `walker_checkpoint.pt` | Saved policy/value checkpoints |
+| `training_log.csv` | Per-episode reward / steps / laser_speed / best |
 
 ## Network Architecture
 
-- **PolicyNet**: obs(24) → Linear(128) → ReLU → Linear(128) → ReLU → Linear(4) → Tanh
-- **ValueNet**: obs(24) → Linear(128) → ReLU → Linear(128) → ReLU → Linear(1)
-- Action distribution: Independent Normal (mean from network, learned log_std)
+- **PolicyNet**: obs → Linear(hidden) → ReLU → Linear(hidden) → ReLU → Linear(act) → Tanh
+- **ValueNet**: obs → Linear(hidden) → ReLU → Linear(hidden) → ReLU → Linear(1)
+- Defaults: obs=24, act=4, hidden from config (default 256)
+- Action distribution: Independent Normal (mean from net, learned log_std)
 
 ## OpenCL Status
 
-- Currently only implements forward kernels
-- Links against libtorch but does **not** call any ATen/c10 APIs yet
-- Heavy numpy ↔ OpenCL copies every layer → usually slower than pure PyTorch CPU
-- Automatic fallback chain:
-  1. Custom OpenCL kernel
-  2. Attempt `torch.device("ocl:0")` (almost always fails)
-  3. Normal PyTorch CPU
+- Uses real `torch::Tensor` API (no numpy round-trips)
+- Tiled SGEMM (TILE=16, local memory) + fused bias + optional ReLU/Tanh
+- Weight/bias buffer cache keyed by data pointer
+- Size gate: only OpenCL when `x.numel() * N >= opencl_min_elements` (default 8192)
+- Compute chain from config: `opencl,aten` (falls through to ATen/CPU)
+- Backward kernels hooked into Python autograd via OpenCL backward functions
+- Tiled GEMM adapted from dlprimitives (MIT, Artyom Beilis) with attribution comment in source
 
 ## Laser Hazard
 
-- Activates after `step_count > 100`
-- Starts at `laser_pos = 0.0`, moves and accelerates
-- Terminates episode on hit (distance < 0.5) with -10 reward
-- User has already adjusted spawn / speed
+- Activates after `step_count > laser_activate_after` (from config)
+- Starts at `laser_pos = -5`, base speed from config `laser_speed`
+- Accelerates each step; terminates on hit (distance < 0.5) with -10 reward
+- All laser settings (`laser_speed`, `laser_range`, `laser_activate_after`) are now wired from config
 
 ## Build
 
 ```bash
 python setup_ocl.py
-```
-
-Requires: libtorch (or PyTorch with cmake files), OpenCL, pybind11, CMake.
-
-## Run Modes
-
-```bash
-python text_trainer.py --train          # headless training
-python text_trainer.py --run            # inference + video
-python text_trainer.py --runtrain       # training with GUI
-python text_trainer.py --fixtrain       # training + fixer process
-```

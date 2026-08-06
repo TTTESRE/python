@@ -26,6 +26,8 @@
 - [x] Size-based dispatch: only use OpenCL for `x.numel() * N >= 8192`
 - [x] CMake + setup_ocl.py build system (links libtorch + torch_python + OpenCL)
 - [x] `is_available()` check
+- [x] OpenCL backward kernels hooked into Python autograd
+- [x] dlprimitives attribution comment added to opencl_ocl.cc
 
 ## Fixers
 
@@ -40,6 +42,12 @@
 - [x] Batched update smoke test under gdb (M=64 through OpenCL path): no crash, grads finite
 - [x] Integrated network forward (OpenCL vs CPU): maxerr ~1e-7
 
+## Config Wiring
+
+- [x] Wired `config.yaml` laser settings (`laser_speed`, `laser_range`, `laser_activate_after`) into `LaserHazardWrapper`
+- [x] Wired `config.yaml` `hidden` parameter into `PolicyNet` and `ValueNet`
+- [x] Fixed laser_speed logging in training_log.csv
+
 ## Fixes Already Applied by User
 
 - [x] Laser no longer spawns directly on top of the walker
@@ -51,3 +59,4 @@
 - Best model is saved when a new high reward is reached
 - Inference mode loads `best_walker.pt` and can record video to webm/mp4 via ffmpeg
 - fixer.cc + fixer_opencl run as subprocesses in fix modes
+- Vectorized training no longer resets all envs after every update
