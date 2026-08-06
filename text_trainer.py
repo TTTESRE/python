@@ -184,9 +184,16 @@ def ocl_linear(x, w, b):
         if backend == "opencl":
             r = _try_opencl_linear(x, w, b)
             if r is not None:
+                _dash_stats.forwards += 1
+                _dash_stats.opencl_calls += 1
+                _dash_stats.samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _dash_stats.forwards += 1
+            _dash_stats.aten_calls += 1
             return torch.nn.functional.linear(x, w, b)
+    _dash_stats.forwards += 1
+    _dash_stats.aten_calls += 1
     return torch.nn.functional.linear(x, w, b)
 
 
@@ -195,9 +202,16 @@ def ocl_relu(x):
         if backend == "opencl":
             r = _try_opencl_relu(x)
             if r is not None:
+                _dash_stats.forwards += 1
+                _dash_stats.opencl_calls += 1
+                _dash_stats.samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _dash_stats.forwards += 1
+            _dash_stats.aten_calls += 1
             return torch.nn.functional.relu(x)
+    _dash_stats.forwards += 1
+    _dash_stats.aten_calls += 1
     return torch.nn.functional.relu(x)
 
 
@@ -206,9 +220,16 @@ def ocl_tanh(x):
         if backend == "opencl":
             r = _try_opencl_tanh(x)
             if r is not None:
+                _dash_stats.forwards += 1
+                _dash_stats.opencl_calls += 1
+                _dash_stats.samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _dash_stats.forwards += 1
+            _dash_stats.aten_calls += 1
             return torch.tanh(x)
+    _dash_stats.forwards += 1
+    _dash_stats.aten_calls += 1
     return torch.tanh(x)
 
 
@@ -217,9 +238,16 @@ def ocl_linear_relu(x, w, b):
         if backend == "opencl":
             r = _try_opencl_linear_relu(x, w, b)
             if r is not None:
+                _dash_stats.forwards += 1
+                _dash_stats.opencl_calls += 1
+                _dash_stats.samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _dash_stats.forwards += 1
+            _dash_stats.aten_calls += 1
             return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
+    _dash_stats.forwards += 1
+    _dash_stats.aten_calls += 1
     return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
 
 
@@ -228,9 +256,16 @@ def ocl_linear_tanh(x, w, b):
         if backend == "opencl":
             r = _try_opencl_linear_tanh(x, w, b)
             if r is not None:
+                _dash_stats.forwards += 1
+                _dash_stats.opencl_calls += 1
+                _dash_stats.samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _dash_stats.forwards += 1
+            _dash_stats.aten_calls += 1
             return torch.tanh(torch.nn.functional.linear(x, w, b))
+    _dash_stats.forwards += 1
+    _dash_stats.aten_calls += 1
     return torch.tanh(torch.nn.functional.linear(x, w, b))
 
 
@@ -354,6 +389,7 @@ class PPOAgent:
         loss = policy_loss - self.entropy_coef * entropy + self.vf_coef * value_loss
         self.optimizer.zero_grad()
         loss.backward()
+        _dash_stats.backwards += 1
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
         torch.nn.utils.clip_grad_norm_(self.value.parameters(), 0.5)
         self.optimizer.step()
@@ -469,6 +505,7 @@ class LaserHazardWrapper(gym.Wrapper):
 
 class WalkerTrainer:
     def __init__(self, mode="runtrain", video_path=None, container="webm", config_path=None):
+        cfg = load_config(config_path)
         self.env_name = cfg.get("env", "BipedalWalker-v3")
         self.max_episodes = int(cfg.get("max_episodes", 5000))
         self.max_steps = int(cfg.get("max_steps", 1600))
@@ -538,18 +575,12 @@ class WalkerTrainer:
         self.best_reward = -float("inf")
         self.episode = 0
 
-        signal.signal(signal.SIGINT, self._signal_handler)
-        self.checkpoint_path = "walker_checkpoint.pt"
-
         self._init_logging()
 
         if self.fix_mode:
             self._launch_fixer()
 
     def _init_logging(self):
-        self.recent_rewards = []
-        self.log_path = "training_log.csv"
-        self.writer = None
         try:
             from torch.utils.tensorboard import SummaryWriter
             self.writer = SummaryWriter(log_dir="runs/walker")
@@ -767,11 +798,16 @@ class WalkerTrainer:
 
             episode_reward += reward
             episode_steps += 1
+            _dash_stats.env_steps += 1
             obs = next_obs
             total_steps += 1
 
             if done or episode_steps >= self.max_steps:
                 self.episode += 1
+                _dash_stats.episodes += 1
+                _dash_stats.reward = episode_reward
+                if episode_reward > _dash_stats.best_reward:
+                    _dash_stats.best_reward = episode_reward
                 laser_info = ""
                 laser_speed = 0.0
                 if hasattr(self.env, 'env') and hasattr(self.env.env, 'laser_speed'):
@@ -848,12 +884,17 @@ class WalkerTrainer:
 
             ep_rewards += rewards
             ep_steps += 1
+            _dash_stats.env_steps += self.num_envs
             total_steps += self.num_envs
             obs = next_obs
 
             for i in range(self.num_envs):
                 if dones[i]:
                     self.episode += 1
+                    _dash_stats.episodes += 1
+                    _dash_stats.reward = float(ep_rewards[i])
+                    if ep_rewards[i] > _dash_stats.best_reward:
+                        _dash_stats.best_reward = float(ep_rewards[i])
                     laser_info = ""
                     laser_speed = 0.0
                     if hasattr(self.env, 'envs') and i < len(self.env.envs):

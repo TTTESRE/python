@@ -1,1 +1,63 @@
-this an gymnasium box2d bipedial walker trainer. it also includes a custom opencl kernel for opencl support and fixers too and credits to the pytorch_dlprim project for the kernel arch.	https://github.com/artyom-beilis/pytorch_dlprim
+# BipedalWalker OpenCL PPO Trainer
+
+> **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python.
+
+## What this is
+
+- PPO trainer for `BipedalWalker-v3` with a custom laser hazard wrapper
+- OpenCL acceleration for neural network forward/backward passes via `libtorch` tensors
+- Tiled SGEMM kernel adapted from [dlprimitives](https://github.com/artyom-beilis/dlprimitives) (MIT License, Artyom Beilis)
+- Optional pygame rendering + ffmpeg video recording
+- Config-driven hyperparameters (`config.yaml`)
+- Optional `SyncVectorEnv` parallel environments
+- CSV + TensorBoard logging
+- Live terminal dashboard (`dashboard.py`)
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `text_trainer.py` | Main training / inference loop, PPO agent, LaserHazardWrapper, OpenCL dispatch |
+| `opencl_ocl.cc` | OpenCL kernels (tiled SGEMM, fused Linear+ReLU/Tanh, ReLU/Tanh, backward) + pybind11 |
+| `setup_ocl.py` | Builds the OpenCL extension with CMake + libtorch |
+| `CMakeLists.txt` | CMake config (Torch, torch_python, OpenCL, pybind11) |
+| `config.yaml` | Hyperparameters (episodes, lr, laser, hidden, num_envs, compute_chain, …) |
+| `fixer.cc` | Forces pygame `display.flip()` + `event.pump()` via GDB every 33ms |
+| `fixer_opencl.cc` | Validates OpenCL vs CPU every 1s; calls `cleanup()` on mismatch |
+| `dashboard.py` | Live terminal dashboard with training, performance, OpenCL, kernel, and system stats |
+| `best_walker.pt` / `walker_checkpoint.pt` | Saved policy/value checkpoints |
+| `training_log.csv` | Per-episode reward / steps / laser_speed / best |
+
+## Build
+
+```bash
+python setup_ocl.py
+```
+
+## Train
+
+```bash
+python text_trainer.py --train
+```
+
+## Run inference
+
+```bash
+python text_trainer.py --run
+```
+
+## Requirements
+
+- Python 3.12+
+- PyTorch with libtorch
+- OpenCL SDK / ICD
+- pybind11
+- gymnasium, pygame, numpy, pyyaml, psutil
+
+## License
+
+MIT — see `LICENSE` for details.
+
+## Attribution
+
+Tiled SGEMM kernel adapted from [dlprimitives](https://github.com/artyom-beilis/dlprimitives) (MIT License, Artyom Beilis).

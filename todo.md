@@ -55,8 +55,8 @@
 
 ## Finish
 
- - [ ] Clean terminal redraw
- - [ ] Refresh 8 times every second Configurable via the config.yml of board_fps
- - [ ] Exit cleanly
+- [ ] Clean terminal redraw
+- [ ] Refresh 8 times every second Configurable via the config.yml of board_fps
+- [ ] Exit cleanly
 ## Extra Info
- - READ dashboard.py first and modify dashboard.py to be like this and text_trainer.py will import dashboard.py
+- READ dashboard.py first and modify dashboard.py to be like this and text_trainer.py will import dashboard.py
