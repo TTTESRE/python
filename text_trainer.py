@@ -25,8 +25,6 @@ import torch.nn as nn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import opencl_ocl
-
-
 def load_config(path=None):
     if path is None:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
@@ -471,7 +469,6 @@ class LaserHazardWrapper(gym.Wrapper):
 
 class WalkerTrainer:
     def __init__(self, mode="runtrain", video_path=None, container="webm", config_path=None):
-        cfg = load_config(config_path)
         self.env_name = cfg.get("env", "BipedalWalker-v3")
         self.max_episodes = int(cfg.get("max_episodes", 5000))
         self.max_steps = int(cfg.get("max_steps", 1600))
