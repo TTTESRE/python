@@ -1,0 +1,1 @@
+this an gymnasium box2d bipedial walker trainer. it also includes a custom opencl kernel for opencl support and fixers too and credits to the pytorch_dlprim project for the kernel arch.
