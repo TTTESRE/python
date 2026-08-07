@@ -4,27 +4,27 @@ max_steps: 1600
 update_interval: 4096
 mini_batch_size: 512
 epochs_per_update: 6
-lr: 2e-4
-gamma: 0.995
-lam: 0.97
+lr: 2.0e-4
+gamma: 0.99
+lam: 0.95
 clip: 0.2
-entropy_coef: 0.01
+entropy_coef: 0.02
 vf_coef: 0.5
 laser_range: 2.0
 laser_speed: 0.025
-laser_activate_after: 505
-hidden: 256
-opencl_min_elements: 4096
+laser_activate_after: 999999
+hidden: 512
+opencl_min_elements: 8192
 compute_chain: opencl,aten
 num_envs: 32
 fps: 30
 record_video_container: webm
 reward:
-  progress_coef: 1.5
-  backward_coef: 0.5
-  max_progress_bonus: 1
+  step_coef: 0.01
+  distance_coef: 0.01
+  max_progress_bonus: 0.5
   fall_progress_scale: 0.25
-  laser_survive_per_cs: 0.0
+  laser_survive_per_cs: 0.1
 dashboard:
   enabled: true
   host: 0.0.0.0

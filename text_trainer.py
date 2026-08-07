@@ -32,26 +32,26 @@ def load_config(path=None):
         "env": "BipedalWalker-v3",
         "max_episodes": 5000,
         "max_steps": 1600,
-        "update_interval": 2048,
-        "mini_batch_size": 64,
-        "epochs_per_update": 10,
-        "lr": 3e-4,
+        "update_interval": 4096,
+        "mini_batch_size": 512,
+        "epochs_per_update": 4,
+        "lr": 2.0e-4,
         "gamma": 0.99,
         "lam": 0.95,
         "clip": 0.2,
-        "entropy_coef": 0.01,
+        "entropy_coef": 0.02,
         "vf_coef": 0.5,
         "laser_range": 2.0,
-        "laser_speed": 0.5,
-        "laser_activate_after": 100,
-        "hidden": 128,
+        "laser_speed": 0.025,
+        "laser_activate_after": 999999,
+        "hidden": 512,
         "opencl_min_elements": 8192,
         "compute_chain": ["opencl", "aten"],
         "fps": 30,
         "record_video_container": "webm",
         "reward": {
-            "progress_coef": 0.15,
-            "backward_coef": 0.05,
+            "step_coef": 0.01,
+            "distance_coef": 0.01,
             "max_progress_bonus": 0.5,
             "fall_progress_scale": 0.25,
             "laser_survive_per_cs": 0.1,
@@ -557,7 +557,7 @@ class PPOAgent:
 
 class LaserHazardWrapper(gym.Wrapper):
     def __init__(self, env, laser_speed=0.5, laser_range=2.0, laser_activate_after=100,
-                 progress_coef=0.15, backward_coef=0.05, max_progress_bonus=0.5,
+                 step_coef=0.01, distance_coef=0.01, max_progress_bonus=0.5,
                  fall_progress_scale=0.25, laser_survive_per_cs=0.1, fps=30):
         super().__init__(env)
         self.laser_pos = -5
@@ -573,12 +573,14 @@ class LaserHazardWrapper(gym.Wrapper):
         self._render_window_created = False
         self._clock = pygame.time.Clock()
         self.headless = False
-        self.progress_coef = progress_coef
-        self.backward_coef = backward_coef
+        self.step_coef = step_coef
+        self.distance_coef = distance_coef
         self.max_progress_bonus = max_progress_bonus
         self.fall_progress_scale = fall_progress_scale
         self.laser_survive_per_cs = laser_survive_per_cs
         self.fps = fps
+        self._distance = 0.0
+        self._step_bonus_total = 0.0
         self.prev_hull_x = None
 
     def reset(self, **kwargs):
@@ -589,6 +591,8 @@ class LaserHazardWrapper(gym.Wrapper):
         self.laser_active = False
         self.step_count = 0
         self.current_score = 0.0
+        self._distance = 0.0
+        self._step_bonus_total = 0.0
         self.prev_hull_x = float(obs[0]) if len(obs) > 0 else 0.0
         return obs, info
 
@@ -600,9 +604,26 @@ class LaserHazardWrapper(gym.Wrapper):
         if self.step_count > self.laser_activate_after:
             self.laser_active = True
 
-        progress_bonus = 0.0
-        laser_survive_bonus = 0.0
         vx = float(obs[2]) if len(obs) > 2 else 0.0
+        delta_d = max(vx, 0.0)
+        self._distance += delta_d
+
+        distance_term = self.distance_coef * delta_d
+        step_term = self.step_coef
+        shaped = 1.25 * distance_term + step_term
+
+        is_fall = terminated and not info.get("laser_hit", False)
+        if is_fall:
+            shaped *= self.fall_progress_scale
+
+        if self.laser_active and not info.get("laser_hit", False):
+            dt_ms = 1000.0 / float(self.fps)
+            dt_cs = dt_ms / 10.0
+            shaped += self.laser_survive_per_cs * dt_cs
+
+        shaped = float(np.clip(shaped, -self.max_progress_bonus, self.max_progress_bonus))
+        reward = reward + shaped
+        self._step_bonus_total += step_term
 
         if self.laser_active:
             self.laser_pos += self.laser_speed * self.laser_direction
@@ -622,28 +643,14 @@ class LaserHazardWrapper(gym.Wrapper):
             else:
                 info["laser_hit"] = False
                 reward -= 0.01 * self.laser_speed
-                dt_ms = 1000.0 / float(self.fps)
-                dt_cs = dt_ms / 10.0
-                laser_survive_bonus = self.laser_survive_per_cs * dt_cs
-                reward += laser_survive_bonus
-
-        if self.prev_hull_x is not None:
-            dx = float(obs[0]) - self.prev_hull_x
-            if dx > 0.0:
-                progress_bonus = self.progress_coef * dx
-            elif dx < 0.0:
-                progress_bonus = self.backward_coef * dx
-            progress_bonus = float(np.clip(progress_bonus, -self.max_progress_bonus, self.max_progress_bonus))
-            if terminated and not info.get("laser_hit", False):
-                progress_bonus *= self.fall_progress_scale
-            reward += progress_bonus
-        self.prev_hull_x = float(obs[0]) if len(obs) > 0 else self.prev_hull_x
 
         info["laser_pos"] = self.laser_pos
         info["laser_speed"] = self.laser_speed
         info["laser_active"] = self.laser_active
-        info["progress_bonus"] = progress_bonus
-        info["laser_survive_bonus"] = laser_survive_bonus
+        info["distance"] = self._distance
+        info["step_bonus_total"] = self._step_bonus_total
+        info["progress_bonus"] = shaped
+        info["laser_survive_bonus"] = 0.0
         info["vx"] = vx
 
         if terminated or truncated:
@@ -741,8 +748,8 @@ class WalkerTrainer:
                 laser_speed=float(cfg.get("laser_speed", 0.5)),
                 laser_range=float(cfg.get("laser_range", 2.0)),
                 laser_activate_after=int(cfg.get("laser_activate_after", 100)),
-                progress_coef=float(reward_cfg.get("progress_coef", 0.15)),
-                backward_coef=float(reward_cfg.get("backward_coef", 0.05)),
+                step_coef=float(reward_cfg.get("step_coef", 0.01)),
+                distance_coef=float(reward_cfg.get("distance_coef", 0.01)),
                 max_progress_bonus=float(reward_cfg.get("max_progress_bonus", 0.5)),
                 fall_progress_scale=float(reward_cfg.get("fall_progress_scale", 0.25)),
                 laser_survive_per_cs=float(reward_cfg.get("laser_survive_per_cs", 0.1)),
@@ -799,18 +806,18 @@ class WalkerTrainer:
             self.writer = None
         try:
             with open(self.log_path, "w") as f:
-                f.write("episode,reward,steps,laser_speed,best_reward,progress_bonus,laser_survive_bonus\n")
+                f.write("episode,reward,steps,laser_speed,best_reward,distance,step_bonus,progress_bonus,laser_survive_bonus\n")
         except Exception:
             pass
 
-    def _log_episode(self, episode, reward, steps, laser_speed, progress_bonus=0.0, laser_survive_bonus=0.0):
+    def _log_episode(self, episode, reward, steps, laser_speed, distance=0.0, step_bonus=0.0, progress_bonus=0.0, laser_survive_bonus=0.0):
         self.recent_rewards.append(reward)
         if len(self.recent_rewards) > 50:
             self.recent_rewards.pop(0)
         avg = sum(self.recent_rewards) / len(self.recent_rewards)
         try:
             with open(self.log_path, "a") as f:
-                f.write(f"{episode},{reward:.2f},{steps},{laser_speed:.2f},{self.best_reward:.2f},{progress_bonus:.4f},{laser_survive_bonus:.4f}\n")
+                f.write(f"{episode},{reward:.2f},{steps},{laser_speed:.2f},{self.best_reward:.2f},{distance:.4f},{step_bonus:.4f},{progress_bonus:.4f},{laser_survive_bonus:.4f}\n")
         except Exception:
             pass
         if self.writer is not None:
@@ -818,11 +825,13 @@ class WalkerTrainer:
                 self.writer.add_scalar("reward/episode", reward, episode)
                 self.writer.add_scalar("reward/avg50", avg, episode)
                 self.writer.add_scalar("laser/speed", laser_speed, episode)
+                self.writer.add_scalar("reward/distance", distance, episode)
+                self.writer.add_scalar("reward/step_bonus", step_bonus, episode)
                 self.writer.add_scalar("reward/progress_bonus", progress_bonus, episode)
                 self.writer.add_scalar("reward/laser_survive_bonus", laser_survive_bonus, episode)
             except Exception:
                 pass
-        self._publish_live_stats(episode, reward, steps, laser_speed)
+        self._publish_live_stats(episode, reward, steps, laser_speed, distance)
         return avg
 
     def _stop_logging(self):
@@ -834,7 +843,7 @@ class WalkerTrainer:
                 pass
             self.writer = None
 
-    def _publish_live_stats(self, episode, reward, steps, laser_speed):
+    def _publish_live_stats(self, episode, reward, steps, laser_speed, distance=0.0):
         global _ocl_forwards, _ocl_backwards, _aten_forwards, _aten_backwards
         global _ocl_samples, _aten_samples, _kernel_time_total, _kernel_time_count
         global _env_steps, _start_time, _last_stats_time, _last_env_steps
@@ -883,6 +892,8 @@ class WalkerTrainer:
             "best_reward": self.best_reward,
             "steps": steps,
             "laser_speed": laser_speed,
+            "distance": distance,
+            "mean_vx": distance / steps if steps > 0 else 0.0,
             "opencl_enabled": opencl_ocl.is_available(),
             "compute_chain": list(self.compute_chain),
             "opencl_min_elements": int(_OCL_MIN_ELEMENTS),
@@ -1178,7 +1189,9 @@ class WalkerTrainer:
                     laser_info = f" | Laser spd={laser_speed:.2f}"
                 progress_bonus = float(last_info.get("progress_bonus", 0.0))
                 laser_survive_bonus = float(last_info.get("laser_survive_bonus", 0.0))
-                avg = self._log_episode(self.episode, episode_reward, episode_steps, laser_speed, progress_bonus, laser_survive_bonus)
+                distance = float(last_info.get("distance", 0.0))
+                step_bonus = float(last_info.get("step_bonus_total", 0.0))
+                avg = self._log_episode(self.episode, episode_reward, episode_steps, laser_speed, distance, step_bonus, progress_bonus, laser_survive_bonus)
                 print(f"Episode {self.episode:4d} | Reward: {episode_reward:8.2f} | Avg50: {avg:7.2f} | Steps: {episode_steps:4d}{laser_info}")
 
                 if episode_reward > self.best_reward:
@@ -1267,10 +1280,14 @@ class WalkerTrainer:
                             laser_info = f" | Laser spd={laser_speed:.2f}"
                     progress_bonus = 0.0
                     laser_survive_bonus = 0.0
+                    distance = 0.0
+                    step_bonus = 0.0
                     if isinstance(infos, dict):
                         progress_bonus = float(infos.get("progress_bonus", np.zeros(self.num_envs))[i])
                         laser_survive_bonus = float(infos.get("laser_survive_bonus", np.zeros(self.num_envs))[i])
-                    avg = self._log_episode(self.episode, float(ep_rewards[i]), int(ep_steps[i]), laser_speed, progress_bonus, laser_survive_bonus)
+                        distance = float(infos.get("distance", np.zeros(self.num_envs))[i])
+                        step_bonus = float(infos.get("step_bonus_total", np.zeros(self.num_envs))[i])
+                    avg = self._log_episode(self.episode, float(ep_rewards[i]), int(ep_steps[i]), laser_speed, distance, step_bonus, progress_bonus, laser_survive_bonus)
                     print(f"Episode {self.episode:4d} | Reward: {ep_rewards[i]:8.2f} | Avg50: {avg:7.2f} | Steps: {ep_steps[i]:4d}{laser_info}")
 
                     if ep_rewards[i] > self.best_reward:

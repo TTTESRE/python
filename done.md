@@ -22,15 +22,18 @@
 
 ## Reward Shaping
 
-- [x] Progress bonus: forward hull x-velocity gives positive reward, backward gives penalty
-- [x] Progress clipped to `[-max_progress_bonus, max_progress_bonus]`
-- [x] Fall progress scale: reduced progress credit on fall (`fall_progress_scale`)
-- [x] Laser survival bonus: +`laser_survive_per_cs` per centisecond while laser active and not hit
-- [x] Config keys in `config.yaml` under `reward:` and `fps:`
+- [x] Distance bonus: integrate positive `obs[2]` (hull vx) as forward distance
+- [x] Step bonus: +`step_coef` per step survived
+- [x] Shaping formula: `shaped = 1.25 * (distance_coef * delta_d) + step_coef`
+- [x] Fall scales shaping by `fall_progress_scale`; never treats fall as success
+- [x] Laser survival bonus: +`laser_survive_per_cs` per centisecond while active and not hit
+- [x] Config keys in `config.yaml` under `reward:` (`step_coef`, `distance_coef`, `max_progress_bonus`, `fall_progress_scale`, `laser_survive_per_cs`)
 - [x] All shaping wired through `LaserHazardWrapper` only
-- [x] CSV logging extended with `progress_bonus` and `laser_survive_bonus`
-- [x] TensorBoard logging for `reward/progress_bonus` and `reward/laser_survive_bonus`
-- [x] Verified trainer runs with shaping enabled and CSV output correct
+- [x] CSV logging extended with `distance`, `step_bonus`, `progress_bonus`, `laser_survive_bonus`
+- [x] TensorBoard logging for distance, step_bonus, progress_bonus, laser_survive_bonus
+- [x] Live stats include `distance` and `mean_vx` (distance / steps)
+- [x] Dashboard HTML shows Reward Shaping card with distance, mean vx, step bonus, progress bonus, laser survive
+- [x] Verified trainer runs with new shaping and CSV output correct
 
 ## OpenCL Extension
 

@@ -113,6 +113,15 @@
     </div>
 
     <div class="card">
+      <h3>Reward Shaping</h3>
+      <div class="row"><span class="label">Distance</span><span class="value" id="distance">-</span></div>
+      <div class="row"><span class="label">Mean vx</span><span class="value" id="mean_vx">-</span></div>
+      <div class="row"><span class="label">Step bonus</span><span class="value" id="step_bonus">-</span></div>
+      <div class="row"><span class="label">Progress bonus</span><span class="value" id="progress_bonus">-</span></div>
+      <div class="row"><span class="label">Laser survive</span><span class="value" id="laser_survive">-</span></div>
+    </div>
+
+    <div class="card">
       <h3>Performance</h3>
       <div class="row"><span class="label">Fwd/s</span><span class="value" id="fwd">-</span></div>
       <div class="row"><span class="label">Bwd/s</span><span class="value" id="bwd">-</span></div>
@@ -177,6 +186,12 @@
       document.getElementById("best").textContent = typeof d.best_reward === "number" ? d.best_reward.toFixed(2) : "-";
       document.getElementById("steps").textContent = d.steps ?? "-";
       document.getElementById("laser").textContent = typeof d.laser_speed === "number" ? d.laser_speed.toFixed(3) : "-";
+
+      document.getElementById("distance").textContent = typeof d.distance === "number" ? d.distance.toFixed(3) : "-";
+      document.getElementById("mean_vx").textContent = typeof d.mean_vx === "number" ? d.mean_vx.toFixed(4) : "-";
+      document.getElementById("step_bonus").textContent = typeof d.step_bonus === "number" ? d.step_bonus.toFixed(4) : "-";
+      document.getElementById("progress_bonus").textContent = typeof d.progress_bonus === "number" ? d.progress_bonus.toFixed(4) : "-";
+      document.getElementById("laser_survive").textContent = typeof d.laser_survive_bonus === "number" ? d.laser_survive_bonus.toFixed(4) : "-";
 
       document.getElementById("fwd").textContent = typeof d.fwd_per_sec === "number" ? d.fwd_per_sec.toFixed(1) : "-";
       document.getElementById("bwd").textContent = typeof d.bwd_per_sec === "number" ? d.bwd_per_sec.toFixed(1) : "-";
