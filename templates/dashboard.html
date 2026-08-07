@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Walker Dashboard</title>
+  <style>
+    :root {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      background: #0f1115;
+      color: #e6e6e6;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #0f1115;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #1b1f27;
+      border: 1px solid #2a303a;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #555;
+    }
+    .dot.live {
+      background: #2dd36f;
+    }
+    .dot.stale {
+      background: #f5a623;
+    }
+    .dot.offline {
+      background: #ff4d4f;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #161a22;
+      border: 1px solid #232a35;
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #8b95a5;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .label {
+      color: #9aa3b2;
+    }
+    .value {
+      font-weight: 600;
+      color: #f0f0f0;
+    }
+    .muted {
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1 style="margin:0;font-size:18px;">Walker Dashboard</h1>
+    <div class="status">
+      <span id="dot" class="dot offline"></span>
+      <span id="status">waiting</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Training</h3>
+      <div class="row"><span class="label">Episode</span><span class="value" id="episode">-</span></div>
+      <div class="row"><span class="label">Reward</span><span class="value" id="reward">-</span></div>
+      <div class="row"><span class="label">Avg50</span><span class="value" id="avg50">-</span></div>
+      <div class="row"><span class="label">Best</span><span class="value" id="best">-</span></div>
+      <div class="row"><span class="label">Steps</span><span class="value" id="steps">-</span></div>
+      <div class="row"><span class="label">Laser speed</span><span class="value" id="laser">-</span></div>
+    </div>
+
+    <div class="card">
+      <h3>Performance</h3>
+      <div class="row"><span class="label">Fwd/s</span><span class="value" id="fwd">-</span></div>
+      <div class="row"><span class="label">Bwd/s</span><span class="value" id="bwd">-</span></div>
+      <div class="row"><span class="label">Samples/s</span><span class="value" id="samples">-</span></div>
+      <div class="row"><span class="label">Env steps/s</span><span class="value" id="env_steps">-</span></div>
+    </div>
+
+    <div class="card">
+      <h3>OpenCL</h3>
+      <div class="row"><span class="label">Enabled</span><span class="value" id="ocl_enabled">-</span></div>
+      <div class="row"><span class="label">Chain</span><span class="value" id="chain">-</span></div>
+      <div class="row"><span class="label">Min elements</span><span class="value" id="threshold">-</span></div>
+      <div class="row"><span class="label">OpenCL calls</span><span class="value" id="ocl_calls">-</span></div>
+      <div class="row"><span class="label">ATen calls</span><span class="value" id="aten_calls">-</span></div>
+      <div class="row"><span class="label">Fallbacks</span><span class="value" id="fallbacks">-</span></div>
+    </div>
+
+    <div class="card">
+      <h3>Kernel</h3>
+      <div class="row"><span class="label">Avg kernel time</span><span class="value" id="k_avg">-</span></div>
+      <div class="row"><span class="label">Total kernel time</span><span class="value" id="k_total">-</span></div>
+    </div>
+
+    <div class="card">
+      <h3>System</h3>
+      <div class="row"><span class="label">RAM</span><span class="value" id="ram">-</span></div>
+      <div class="row"><span class="label">CPU</span><span class="value" id="cpu">-</span></div>
+      <div class="row"><span class="label">Elapsed</span><span class="value" id="elapsed">-</span></div>
+    </div>
+  </div>
+
+  <script>
+    const es = new EventSource("/events");
+    const dot = document.getElementById("dot");
+    const status = document.getElementById("status");
+    let lastUpdate = Date.now();
+
+    es.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      lastUpdate = Date.now();
+      if (!d) {
+        dot.className = "dot offline";
+        status.textContent = "waiting";
+        return;
+      }
+      dot.className = "dot live";
+      status.textContent = "live";
+
+      document.getElementById("episode").textContent = d.episode ?? "-";
+      document.getElementById("reward").textContent = typeof d.reward === "number" ? d.reward.toFixed(2) : "-";
+      document.getElementById("avg50").textContent = typeof d.avg50 === "number" ? d.avg50.toFixed(2) : "-";
+      document.getElementById("best").textContent = typeof d.best_reward === "number" ? d.best_reward.toFixed(2) : "-";
+      document.getElementById("steps").textContent = d.steps ?? "-";
+      document.getElementById("laser").textContent = typeof d.laser_speed === "number" ? d.laser_speed.toFixed(3) : "-";
+
+      document.getElementById("fwd").textContent = typeof d.fwd_per_sec === "number" ? d.fwd_per_sec.toFixed(1) : "-";
+      document.getElementById("bwd").textContent = typeof d.bwd_per_sec === "number" ? d.bwd_per_sec.toFixed(1) : "-";
+      document.getElementById("samples").textContent = typeof d.samples_per_sec === "number" ? d.samples_per_sec.toFixed(1) : "-";
+      document.getElementById("env_steps").textContent = typeof d.env_steps_per_sec === "number" ? d.env_steps_per_sec.toFixed(1) : "-";
+
+      document.getElementById("ocl_enabled").textContent = d.opencl_enabled ? "yes" : "no";
+      document.getElementById("chain").textContent = Array.isArray(d.compute_chain) ? d.compute_chain.join(",") : "-";
+      document.getElementById("threshold").textContent = d.opencl_min_elements ?? "-";
+      document.getElementById("ocl_calls").textContent = d.opencl_calls ?? "-";
+      document.getElementById("aten_calls").textContent = d.aten_calls ?? "-";
+      document.getElementById("fallbacks").textContent = d.fallback_count ?? "-";
+
+      document.getElementById("k_avg").textContent = typeof d.kernel_time_ms_avg === "number" ? d.kernel_time_ms_avg.toFixed(3) + " ms" : "-";
+      document.getElementById("k_total").textContent = typeof d.kernel_time_ms_total === "number" ? d.kernel_time_ms_total.toFixed(3) + " ms" : "-";
+
+      document.getElementById("ram").textContent = typeof d.ram_mb === "number" ? d.ram_mb.toFixed(1) + " MB" : "-";
+      document.getElementById("cpu").textContent = typeof d.cpu_pct === "number" ? d.cpu_pct.toFixed(1) + "%" : "-";
+      document.getElementById("elapsed").textContent = typeof d.elapsed_sec === "number" ? d.elapsed_sec.toFixed(1) + " s" : "-";
+    };
+
+    es.onerror = () => {
+      dot.className = "dot offline";
+      status.textContent = "disconnected";
+    };
+
+    setInterval(() => {
+      const age = Date.now() - lastUpdate;
+      if (age > 2000 && status.textContent !== "disconnected") {
+        dot.className = "dot stale";
+        status.textContent = "stale";
+      }
+    }, 500);
+  </script>
+</body>
+</html>

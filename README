@@ -11,20 +11,21 @@
 - Config-driven hyperparameters (`config.yaml`)
 - Optional `SyncVectorEnv` parallel environments
 - CSV + TensorBoard logging
-- Live terminal dashboard (`dashboard.py`)
+- Live web dashboard (`dashboard_server.py`) via Flask + SSE
 
 ## Key files
 
 | File | Purpose |
 |------|---------|
-| `text_trainer.py` | Main training / inference loop, PPO agent, LaserHazardWrapper, OpenCL dispatch |
+| `text_trainer.py` | Main training / inference loop, PPO agent, LaserHazardWrapper, OpenCL dispatch, atomic live stats writer |
+| `dashboard_server.py` | Flask + SSE server for live browser dashboard |
+| `templates/dashboard.html` | Single-page dashboard UI |
 | `opencl_ocl.cc` | OpenCL kernels (tiled SGEMM, fused Linear+ReLU/Tanh, ReLU/Tanh, backward) + pybind11 |
 | `setup_ocl.py` | Builds the OpenCL extension with CMake + libtorch |
 | `CMakeLists.txt` | CMake config (Torch, torch_python, OpenCL, pybind11) |
-| `config.yaml` | Hyperparameters (episodes, lr, laser, hidden, num_envs, compute_chain, …) |
+| `config.yaml` | Hyperparameters (episodes, lr, laser, hidden, num_envs, compute_chain, dashboard…) |
 | `fixer.cc` | Forces pygame `display.flip()` + `event.pump()` via GDB every 33ms |
 | `fixer_opencl.cc` | Validates OpenCL vs CPU every 1s; calls `cleanup()` on mismatch |
-| `dashboard.py` | Live terminal dashboard with training, performance, OpenCL, kernel, and system stats |
 | `best_walker.pt` / `walker_checkpoint.pt` | Saved policy/value checkpoints |
 | `training_log.csv` | Per-episode reward / steps / laser_speed / best |
 
@@ -40,6 +41,19 @@ python setup_ocl.py
 python text_trainer.py --train
 ```
 
+## Live dashboard
+
+```bash
+# terminal 1
+python text_trainer.py --train
+
+# terminal 2
+python dashboard_server.py
+
+# browser
+http://127.0.0.1:8080
+```
+
 ## Run inference
 
 ```bash
@@ -52,7 +66,7 @@ python text_trainer.py --run
 - PyTorch with libtorch
 - OpenCL SDK / ICD
 - pybind11
-- gymnasium, pygame, numpy, pyyaml, psutil
+- gymnasium, pygame, numpy, pyyaml, psutil, flask
 
 ## License
 

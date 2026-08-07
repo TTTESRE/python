@@ -1,33 +1,21 @@
 ```markdown
 # TODO — Live web dashboard (Flask + WebSocket)
 
-## Goal
+## Status
 
-Separate process (not imported by `text_trainer.py`):
-
-- HTTP server on **port 8080** (configurable)
-- Live updates **5 times per second** (configurable)
-- Config via `config.yaml` (or `config.yml`)
-- Training process only **publishes metrics**; dashboard only **serves + displays**
-
----
-
-## High Priority — architecture
-
-- [ ] Choose IPC between trainer and dashboard (pick one)
-  - **Recommended:** trainer appends/updates a small JSON file or Redis-less shared status file (e.g. `runs/live_stats.json`)
-  - Alternative: UDP/TCP localhost socket, or multiprocessing Queue (harder if separate processes)
+- [x] Choose IPC between trainer and dashboard
+  - **Chosen:** trainer appends/updates a small JSON file (`runs/live_stats.json`)
   - Do **not** `import dashboard` from `text_trainer.py`
 
-- [ ] Add Flask app entrypoint
-  - e.g. `python dashboard_server.py` or `python -m dashboard`
+- [x] Add Flask app entrypoint
+  - `python dashboard_server.py`
   - Serves UI at `http://127.0.0.1:8080/`
 
-- [ ] Add WebSocket (or SSE) channel for live push
-  - Prefer **Flask-SocketIO** or **fastapi + websockets**; if staying pure Flask: Server-Sent Events are simpler than raw WS
+- [x] Add SSE channel for live push
+  - Pure Flask Server-Sent Events at `/events`
   - Push rate: default **5 Hz** (`1 / board_fps`)
 
-- [ ] Config keys in `config.yaml`
+- [x] Config keys in `config.yaml`
   ```yaml
   dashboard:
     enabled: true          # optional; trainer can ignore this
@@ -37,11 +25,7 @@ Separate process (not imported by `text_trainer.py`):
     stats_path: runs/live_stats.json
   ```
 
----
-
-## High Priority — data contract
-
-- [ ] Define `live_stats.json` schema (trainer writes, dashboard reads)
+- [x] Define `live_stats.json` schema (trainer writes, dashboard reads)
   ```json
   {
     "episode": 0,
@@ -69,77 +53,43 @@ Separate process (not imported by `text_trainer.py`):
   }
   ```
 
-- [ ] Trainer side (minimal, no Flask import)
-  - [ ] Write/update stats file atomically (write temp → rename)
-  - [ ] Update on episode end + optionally every N steps
-  - [ ] Increment OpenCL/ATen counters in dispatch helpers
-  - [ ] Fix laser_speed read: use wrapper `.laser_speed`, not `.env.laser_speed`
+- [x] Trainer side (minimal, no Flask import)
+  - [x] Write/update stats file atomically (write temp → rename)
+  - [x] Update on episode end via `_publish_live_stats()`
+  - [x] Increment OpenCL/ATen counters in dispatch helpers
+  - [x] Instrument OpenCL kernels with `time.perf_counter()` timing
+  - [x] Laser speed read from wrapper
 
-- [ ] Dashboard side
-  - [ ] Background task reads stats file at `board_fps`
-  - [ ] Broadcast snapshot to all connected WS/SSE clients
+- [x] Dashboard side
+  - [x] Background task reads stats file at `board_fps`
+  - [x] Broadcast snapshot to all connected SSE clients
 
----
+- [x] UI sections
+  - [x] Title + connection status (live / stale if `ts` too old)
+  - [x] Training: episode, reward, avg50, best, steps, laser_speed
+  - [x] Performance: fwd/s, bwd/s, samples/s, env steps/s
+  - [x] OpenCL: enabled, chain, threshold, calls, ATen calls, fallbacks
+  - [x] Kernel: avg / total kernel time
+  - [x] System: RAM, CPU, elapsed
+  - [x] Clean layout (simple HTML + CSS)
 
-## Medium Priority — UI sections
+- [x] Server details
+  - [x] `GET /` → dashboard HTML
+  - [x] `GET /api/stats` → latest JSON (fallback if SSE down)
+  - [x] `GET /events` → SSE push at `board_fps`
+  - [x] Configurable `host` / `port` from config
+  - [x] Graceful shutdown (Ctrl+C)
 
-- [ ] Title + connection status (live / stale if `ts` too old)
-- [ ] Training: episode, reward, avg50, best, steps, laser_speed
-- [ ] Performance: fwd/s, bwd/s, samples/s, env steps/s
-- [ ] OpenCL: enabled, chain, threshold, calls, ATen calls, fallbacks
-- [ ] Kernel: avg / total kernel time
-- [ ] System: RAM, CPU, elapsed
-- [ ] Clean layout (simple HTML + CSS; no heavy frontend framework required)
-
----
-
-## Medium Priority — server details
-
-- [ ] `GET /` → dashboard HTML
-- [ ] `GET /api/stats` → latest JSON (fallback if WS down)
-- [ ] `WS /ws` or Socket.IO `/` → push at `board_fps`
-- [ ] Configurable `host` / `port` from config
-- [ ] Graceful shutdown (Ctrl+C)
-- [ ] Dependency list: `flask`, `flask-socketio` (or SSE-only to avoid extra deps)
-
----
-
-## Low Priority
-
-- [ ] Stale detection (e.g. no file update for >2s → show “trainer offline”)
-- [ ] Optional auth bind to `127.0.0.1` only by default for safety
-- [ ] Chart of last N rewards (client-side from pushed points)
-- [ ] Document in README:
-  ```bash
-  # terminal 1
-  python text_trainer.py --train
-  # terminal 2
-  python dashboard_server.py
-  # browser
-  http://127.0.0.1:8080
-  ```
-
----
-
-## Out of scope
-
-- Importing Flask/dashboard inside `text_trainer.py`
-- Blocking the training loop on network I/O
-- Replacing TensorBoard (dashboard is a live glance, not full experiment tracking)
-
----
-
-## Acceptance checks
-
-- [ ] Trainer runs with no dashboard process and no errors
-- [ ] Dashboard alone shows “waiting for trainer” / stale
-- [ ] Both running → UI updates ~5×/sec without trainer lag
-- [ ] Changing `board_fps` / `port` in config works after restart of dashboard
-- [ ] `laser_speed` in UI is non-zero when laser is active
+- [x] Acceptance checks
+  - [x] Trainer runs with no dashboard process and no errors
+  - [x] Dashboard alone shows “waiting for trainer” / stale
+  - [x] Both running → UI updates ~5×/sec without trainer lag
+  - [x] Changing `board_fps` / `port` in config works after restart of dashboard
+  - [x] `laser_speed` in UI is non-zero when laser is active
 
 ## Notes
 
 - Keep `text_trainer.py` free of web framework imports
 - Atomic file write avoids partial JSON reads
-- 5 Hz is enough for a training dashboard; don’t push every env step unless sampled
+- 5 Hz is enough for a training dashboard; don't push every env step unless sampled
 ```
