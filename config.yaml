@@ -19,6 +19,12 @@ compute_chain: opencl,aten
 num_envs: 32
 fps: 30
 record_video_container: webm
+reward:
+  progress_coef: 0.15
+  backward_coef: 0.05
+  max_progress_bonus: 0.5
+  fall_progress_scale: 0.25
+  laser_survive_per_cs: 0.1
 dashboard:
   enabled: true
   host: 0.0.0.0

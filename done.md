@@ -20,6 +20,18 @@
 - [x] Dashboard config section in `config.yaml` (`dashboard:` keys)
 - [x] Dashboard server reads config for `host`, `port`, `board_fps`, `stats_path`
 
+## Reward Shaping
+
+- [x] Progress bonus: forward hull x-velocity gives positive reward, backward gives penalty
+- [x] Progress clipped to `[-max_progress_bonus, max_progress_bonus]`
+- [x] Fall progress scale: reduced progress credit on fall (`fall_progress_scale`)
+- [x] Laser survival bonus: +`laser_survive_per_cs` per centisecond while laser active and not hit
+- [x] Config keys in `config.yaml` under `reward:` and `fps:`
+- [x] All shaping wired through `LaserHazardWrapper` only
+- [x] CSV logging extended with `progress_bonus` and `laser_survive_bonus`
+- [x] TensorBoard logging for `reward/progress_bonus` and `reward/laser_survive_bonus`
+- [x] Verified trainer runs with shaping enabled and CSV output correct
+
 ## OpenCL Extension
 
 - [x] Custom OpenCL kernels for Linear, ReLU, Tanh (torch::Tensor API, no numpy round-trips)
