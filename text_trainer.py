@@ -622,13 +622,16 @@ class PPOAgent:
         torch.nn.utils.clip_grad_norm_(self.value.parameters(), 0.5)
         self.optimizer.step()
         opencl_ocl.invalidate_params()
-        del obs, acts, old_logp, returns, advantages, mean, std, dist, new_logp, ratio, surr1, surr2, policy_loss, value_loss, loss
+        pl = policy_loss.item()
+        vl = value_loss.item()
+        ent = entropy.item()
+        del obs, acts, old_logp, returns, advantages, mean, std, dist, new_logp, ratio, surr1, surr2, policy_loss, value_loss, loss, entropy
         try:
             import gc
             gc.collect()
         except Exception:
             pass
-        return policy_loss.item(), value_loss.item(), entropy.item()
+        return pl, vl, ent
 
 
 class LaserHazardWrapper(gym.Wrapper):

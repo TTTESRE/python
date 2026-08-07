@@ -379,7 +379,7 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
     return out;
 }
 
-torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B, torch::Tensor bias, bool cache_b = false) {
+torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B, torch::Tensor bias, bool cache_w = false) {
     ensure_init();
     auto a = A.contiguous().to(torch::kFloat32);
     auto b = B.contiguous().to(torch::kFloat32);
@@ -400,8 +400,8 @@ torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B,
     float* op = out.data_ptr<float>();
 
     cl_mem dA = alloc_buffer((size_t)M * K * sizeof(float));
-    cl_mem dB = cache_b ? get_param_buffer(bp, (size_t)K * N * sizeof(float), false) : alloc_buffer((size_t)K * N * sizeof(float));
-    cl_mem dBias = cache_b ? get_param_buffer(biasp, (size_t)N * sizeof(float), false) : alloc_buffer((size_t)N * sizeof(float));
+    cl_mem dB = cache_w ? get_param_buffer(bp, (size_t)K * N * sizeof(float), false) : alloc_buffer((size_t)K * N * sizeof(float));
+    cl_mem dBias = alloc_buffer((size_t)N * sizeof(float));
     cl_mem dC = alloc_buffer((size_t)M * N * sizeof(float));
 
     clEnqueueWriteBuffer(ocr_queue, dA, CL_TRUE, 0, (size_t)M * K * sizeof(float), ap, 0, nullptr, nullptr);
@@ -410,6 +410,8 @@ torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B,
     clEnqueueReadBuffer(ocr_queue, dC, CL_TRUE, 0, (size_t)M * N * sizeof(float), op, 0, nullptr, nullptr);
 
     release_buffer(dA);
+    if (!cache_w) release_buffer(dB);
+    release_buffer(dBias);
     release_buffer(dC);
     return out;
 }
