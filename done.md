@@ -54,6 +54,15 @@
 - [x] UI sections: training, performance, OpenCL, kernel, system
 - [x] Verified trainer runs standalone without dashboard process
 - [x] Verified dashboard shows waiting state when trainer is offline
+- [x] Title + connection status (live / stale / offline)
+- [x] Training card: episode, reward, avg50, best, steps, laser_speed
+- [x] Performance card: fwd/s, bwd/s, samples/s, env steps/s
+- [x] OpenCL card: enabled, chain, threshold, calls, ATen calls, fallbacks
+- [x] Kernel card: avg kernel time, total kernel time
+- [x] System card: RAM, CPU, elapsed
+- [x] Clean layout with simple HTML + CSS
+- [x] Graceful shutdown on Ctrl+C
+- [x] `laser_speed` in UI is non-zero when laser is active
 
 ## Verification
 
