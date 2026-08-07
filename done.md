@@ -93,6 +93,19 @@
 - [x] Memory card: current RAM, peak RAM, cleanup counts, leak warning
 - [x] OpenCL cache stats: param_cache size, buf_cache size
 
+## OpenCL Memory & Cache Fixes
+
+- [x] Fixed `UnboundLocalError` in `PPOAgent.update`: extract `policy_loss.item()`, `value_loss.item()`, `entropy.item()` before `del`
+- [x] Fixed `dBias` leak in `std_kernel_dispatch`: always `alloc_buffer` + `release_buffer` (never cached)
+- [x] Renamed `cache_b` flag to `cache_w` to clarify it only controls weight caching
+- [x] `g_param_cache` eviction now respects byte budget in addition to entry count
+- [x] Exposed `set_cache_limits(max_param_mb, max_buf_mb)` in C++ module
+- [x] Wired `opencl:` config section (`max_param_cache_mb`, `max_buf_cache_mb`) from `config.yaml` → `set_cache_limits()` in `WalkerTrainer.__init__`
+- [x] Added `drop_param_cache()` and `drop_scratch_cache()` bindings
+- [x] Added detailed per-update `[mem]` log line: rss_mb, ocl_param_entries, ocl_param_mb, ocl_buf_entries, ocl_buf_mb
+- [x] Dashboard: Param cache / Param MB / Buf cache / Buf MB rows in OpenCL card
+- [x] 30s smoke test passed with rebuilt extension
+
 ## OOM Prevention
 
 - [x] Monitor process RAM (RSS) every 2 seconds via psutil
@@ -126,6 +139,7 @@
 - [x] Fixed laser_speed logging in training_log.csv
 - [x] Added `dashboard:` config section with `enabled`, `host`, `port`, `board_fps`, `stats_path`
 - [x] Dashboard defaults included in `load_config()`
+- [x] Wired `opencl:` config section (`max_param_cache_mb`, `max_buf_cache_mb`) to C++ `set_cache_limits()`
 
 ## Fixes Already Applied by User
 

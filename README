@@ -12,6 +12,8 @@
 - Optional `SyncVectorEnv` parallel environments
 - CSV + TensorBoard logging
 - Live web dashboard (`dashboard_server.py`) via Flask + SSE
+- OpenCL cache limits configurable via `opencl:` section in `config.yaml`
+- Per-update memory logging and dashboard cache stats
 
 ## Key files
 

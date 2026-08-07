@@ -41,11 +41,15 @@ BipedalWalker-v3 PPO trainer with:
 - Uses real `torch::Tensor` API (no numpy round-trips)
 - Tiled SGEMM (TILE=16, local memory) + fused bias + optional ReLU/Tanh
 - Weight/bias buffer cache keyed by data pointer
-- Size gate: only OpenCL when `x.numel() * N >= opencl_min_elements` (default 8192)
+- Size gate: only use OpenCL for `x.numel() * N >= opencl_min_elements` (default 8192)
 - Compute chain from config: `opencl,aten` (falls through to ATen/CPU)
 - Backward kernels hooked into Python autograd via OpenCL backward functions
 - Tiled GEMM adapted from dlprimitives (MIT, Artyom Beilis) with attribution comment in source
 - Instrumented with `time.perf_counter()` kernel timing and module-level call/sample counters
+- Cache limits configurable via `opencl:` section in `config.yaml` (`max_param_cache_mb`, `max_buf_cache_mb`)
+- C++ API: `set_cache_limits(max_param_mb, max_buf_mb)`, `drop_param_cache()`, `drop_scratch_cache()`, `cache_stats()`
+- Backward paths use `alloc_buffer`/`release_buffer` for activations/gradients; only weights/bias use param cache
+- Per-update memory logging: `[mem] rss_mb=... ocl_param_entries=... ocl_param_mb=... ocl_buf_entries=... ocl_buf_mb=...`
 
 ## Laser Hazard
 
