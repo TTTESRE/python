@@ -1379,6 +1379,9 @@ if __name__ == "__main__":
     parser.add_argument("--fixruntrain", action="store_true", help="GUI training with fixer.cc forcing every frame")
     parser.add_argument("--video", type=str, default=None, help="Output video path for --run/--fixrun")
     parser.add_argument("--mp4", action="store_true", help="Use mp4 container instead of webm for video output")
+    parser.add_argument("--config", type=str, default=None, help="Path to config YAML file")
+    parser.add_argument("--log", type=str, default=None, help="Path to CSV log file")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint file")
     args = parser.parse_args()
 
     if args.fixrun:
@@ -1395,5 +1398,9 @@ if __name__ == "__main__":
         mode = "runtrain"
 
     container = "mp4" if args.mp4 else "webm"
-    trainer = WalkerTrainer(mode=mode, video_path=args.video, container=container)
+    trainer = WalkerTrainer(mode=mode, video_path=args.video, container=container, config_path=args.config)
+    if args.log:
+        trainer.log_path = args.log
+    if args.checkpoint:
+        trainer.checkpoint_path = args.checkpoint
     trainer.train()
