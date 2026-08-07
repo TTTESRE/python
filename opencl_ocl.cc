@@ -38,9 +38,10 @@ std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
 std::unordered_map<size_t, cl_mem> g_buf_cache;
 std::unordered_map<void*, uint64_t> g_param_version;
 
-constexpr size_t kMaxParamCacheEntries = 64;
-constexpr size_t kMaxBufCacheEntries = 64;
-constexpr size_t kMaxBufCacheBytes = 256 * 1024 * 1024;
+size_t g_max_param_cache_entries = 64;
+size_t g_max_param_cache_bytes = 256 * 1024 * 1024;
+size_t g_max_buf_cache_entries = 64;
+size_t g_max_buf_cache_bytes = 256 * 1024 * 1024;
 
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
@@ -248,8 +249,11 @@ cl_mem get_param_buffer(const float* host, size_t nbytes, bool force_upload = fa
         }
         return it->second.first;
     }
-    if (g_param_cache.size() >= kMaxParamCacheEntries) {
+    size_t total_param_bytes = 0;
+    for (const auto& kv : g_param_cache) total_param_bytes += kv.second.second;
+    while (total_param_bytes + nbytes > g_max_param_cache_bytes && !g_param_cache.empty()) {
         auto oldest = g_param_cache.begin();
+        total_param_bytes -= oldest->second.second;
         clReleaseMemObject(oldest->second.first);
         g_param_cache.erase(oldest);
     }
@@ -276,10 +280,10 @@ void release_buffer(cl_mem buf) {
     size_t nbytes = 0;
     clGetMemObjectInfo(buf, CL_MEM_SIZE, sizeof(size_t), &nbytes, nullptr);
     if (nbytes > 0) {
-        if (g_buf_cache.size() >= kMaxBufCacheEntries) {
+        if (g_buf_cache.size() >= g_max_buf_cache_entries) {
             size_t total_bytes = 0;
             for (const auto& kv : g_buf_cache) total_bytes += kv.first;
-            if (total_bytes + nbytes > kMaxBufCacheBytes) {
+            if (total_bytes + nbytes > g_max_buf_cache_bytes) {
                 auto oldest = g_buf_cache.begin();
                 clReleaseMemObject(oldest->second);
                 g_buf_cache.erase(oldest);
@@ -492,6 +496,11 @@ void drop_scratch_cache() {
     g_buf_cache.clear();
 }
 
+void set_cache_limits(size_t max_param_mb, size_t max_buf_mb) {
+    g_max_param_cache_bytes = max_param_mb * 1024 * 1024;
+    g_max_buf_cache_bytes = max_buf_mb * 1024 * 1024;
+}
+
 std::pair<size_t, size_t> get_cache_stats() {
     size_t param_count = g_param_cache.size();
     size_t buf_count = g_buf_cache.size();
@@ -626,6 +635,7 @@ PYBIND11_MODULE(opencl_ocl, m) {
     m.def("invalidate_params", &invalidate_param_cache, "Clear param version map so next forward re-uploads weights");
     m.def("drop_param_cache", &drop_param_cache, "Drop param device buffers (force re-upload on next forward)");
     m.def("drop_scratch_cache", &drop_scratch_cache, "Drop scratch buffers from g_buf_cache");
+    m.def("set_cache_limits", &set_cache_limits, "Set cache limits: max_param_entries, max_buf_entries, max_buf_bytes");
     m.def("cache_stats", &cache_stats, "Return dict with param/buf entries and bytes");
     m.def("is_available", []() { ensure_init(); return ocr_device_ready; }, "Check if OpenCL device is ready");
     m.def("get_cache_stats", &get_cache_stats, "Return (param_cache_size, buf_cache_size)");

@@ -801,6 +801,14 @@ class WalkerTrainer:
             compute_chain = [s.strip() for s in compute_chain.split(",") if s.strip()]
         self.compute_chain = compute_chain
         set_compute_chain(compute_chain)
+        try:
+            ocl_cfg = cfg.get("opencl", {})
+            opencl_ocl.set_cache_limits(
+                int(ocl_cfg.get("max_param_cache_mb", 256)),
+                int(ocl_cfg.get("max_buf_cache_mb", 128)),
+            )
+        except Exception:
+            pass
         self.render = mode in ("run", "runtrain", "fixrun", "fixruntrain", "fixtrain")
         self.video_path = video_path or ("run_inference.webm" if container == "webm" else "run_inference.mp4")
         self.container = container
