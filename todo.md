@@ -1,7 +1,3 @@
-```markdown
-# TODO — Progress reward + laser survival reward
-
-## Status
+# TODO
 
 All items completed. See `done.md` for details.
-```

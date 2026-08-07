@@ -233,31 +233,81 @@ def set_compute_chain(chain):
 
 def _try_opencl_linear(x, w, b):
     if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-        return OpenCLLinear.apply(x, w, b)
+        try:
+            return OpenCLLinear.apply(x, w, b)
+        except Exception:
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+            try:
+                return OpenCLLinear.apply(x, w, b)
+            except Exception:
+                pass
     return None
 
 
 def _try_opencl_linear_relu(x, w, b):
     if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-        return OpenCLLinearReLU.apply(x, w, b)
+        try:
+            return OpenCLLinearReLU.apply(x, w, b)
+        except Exception:
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+            try:
+                return OpenCLLinearReLU.apply(x, w, b)
+            except Exception:
+                pass
     return None
 
 
 def _try_opencl_linear_tanh(x, w, b):
     if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
-        return OpenCLLinearTanh.apply(x, w, b)
+        try:
+            return OpenCLLinearTanh.apply(x, w, b)
+        except Exception:
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+            try:
+                return OpenCLLinearTanh.apply(x, w, b)
+            except Exception:
+                pass
     return None
 
 
 def _try_opencl_relu(x):
     if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
-        return OpenCLReLU.apply(x)
+        try:
+            return OpenCLReLU.apply(x)
+        except Exception:
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+            try:
+                return OpenCLReLU.apply(x)
+            except Exception:
+                pass
     return None
 
 
 def _try_opencl_tanh(x):
     if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
-        return OpenCLTanh.apply(x)
+        try:
+            return OpenCLTanh.apply(x)
+        except Exception:
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+            try:
+                return OpenCLTanh.apply(x)
+            except Exception:
+                pass
     return None
 
 
@@ -396,6 +446,14 @@ class PPOAgent:
         self.clip = clip
         self.entropy_coef = entropy_coef
         self.vf_coef = vf_coef
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self._buf_obs = None
+        self._buf_acts = None
+        self._buf_logp = None
+        self._buf_ret = None
+        self._buf_adv = None
+        self._buf_max = 0
 
     def get_action(self, obs):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
@@ -448,11 +506,30 @@ class PPOAgent:
     def update(self, trajectories):
         if len(trajectories) == 0:
             return 0.0, 0.0, 0.0
-        obs = torch.as_tensor(np.stack([t["obs"] for t in trajectories]), dtype=torch.float32, device=self.device)
-        acts = torch.as_tensor(np.stack([t["act"] for t in trajectories]), dtype=torch.float32, device=self.device)
-        old_logp = torch.as_tensor([t["logp"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
-        returns = torch.as_tensor([t["ret"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
-        advantages = torch.as_tensor([t["adv"] for t in trajectories], dtype=torch.float32, device=self.device).unsqueeze(1)
+        n = len(trajectories)
+        if self._buf_max < n:
+            self._buf_max = max(n, self._buf_max + 1024)
+            self._buf_obs = np.empty((self._buf_max, self.obs_dim), dtype=np.float32)
+            self._buf_acts = np.empty((self._buf_max, self.act_dim), dtype=np.float32)
+            self._buf_logp = np.empty(self._buf_max, dtype=np.float32)
+            self._buf_ret = np.empty(self._buf_max, dtype=np.float32)
+            self._buf_adv = np.empty(self._buf_max, dtype=np.float32)
+        obs_np = self._buf_obs[:n]
+        acts_np = self._buf_acts[:n]
+        logp_np = self._buf_logp[:n]
+        ret_np = self._buf_ret[:n]
+        adv_np = self._buf_adv[:n]
+        for i, t in enumerate(trajectories):
+            obs_np[i] = t["obs"]
+            acts_np[i] = t["act"]
+            logp_np[i] = t["logp"]
+            ret_np[i] = t["ret"]
+            adv_np[i] = t["adv"]
+        obs = torch.as_tensor(obs_np, dtype=torch.float32, device=self.device)
+        acts = torch.as_tensor(acts_np, dtype=torch.float32, device=self.device)
+        old_logp = torch.as_tensor(logp_np, dtype=torch.float32, device=self.device).unsqueeze(1)
+        returns = torch.as_tensor(ret_np, dtype=torch.float32, device=self.device).unsqueeze(1)
+        advantages = torch.as_tensor(adv_np, dtype=torch.float32, device=self.device).unsqueeze(1)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         mean = self.policy(obs)
@@ -647,6 +724,14 @@ class WalkerTrainer:
         self.ffmpeg_proc = None
         self.fixer_proc = None
         self.fixer_opencl_proc = None
+        self.peak_ram_mb = 0.0
+        self.cleanup_count = 0
+        self.emergency_cleanup_count = 0
+        self._last_cleanup_update = -10
+        self._last_ram_check_time = time.perf_counter()
+        self._ram_rising_steps = 0
+        self._last_ram_for_trend = 0.0
+        self._last_tensor_count = 0
 
         def make_env():
             e = gym.make(self.env_name, render_mode="rgb_array")
@@ -768,12 +853,27 @@ class WalkerTrainer:
         samples_per_sec = (_ocl_samples + _aten_samples) / elapsed if elapsed > 0 else 0.0
         kernel_time_ms_avg = (_kernel_time_total / _kernel_time_count * 1000.0) if _kernel_time_count > 0 else 0.0
         kernel_time_ms_total = _kernel_time_total * 1000.0
-        ram_mb = 0.0
+        ram_mb = self._get_ram_mb()
         cpu_pct = 0.0
         try:
             import psutil
-            ram_mb = psutil.Process().memory_info().rss / 1024 / 1024
             cpu_pct = psutil.Process().cpu_percent()
+        except Exception:
+            pass
+        if ram_mb > self.peak_ram_mb:
+            self.peak_ram_mb = ram_mb
+        ram_leak_warning = False
+        if ram_mb >= self._last_ram_for_trend:
+            self._ram_rising_steps += 1
+        else:
+            self._ram_rising_steps = max(0, self._ram_rising_steps - 2)
+        self._last_ram_for_trend = ram_mb
+        if self._ram_rising_steps >= 60:
+            ram_leak_warning = True
+        opencl_param_cache = 0
+        opencl_buf_cache = 0
+        try:
+            opencl_param_cache, opencl_buf_cache = opencl_ocl.get_cache_stats()
         except Exception:
             pass
         stats = {
@@ -796,8 +896,14 @@ class WalkerTrainer:
             "kernel_time_ms_avg": kernel_time_ms_avg,
             "kernel_time_ms_total": kernel_time_ms_total,
             "ram_mb": ram_mb,
+            "peak_ram_mb": self.peak_ram_mb,
             "cpu_pct": cpu_pct,
             "elapsed_sec": elapsed,
+            "opencl_cleanup_count": self.cleanup_count,
+            "emergency_cleanup_count": self.emergency_cleanup_count,
+            "opencl_param_cache": opencl_param_cache,
+            "opencl_buf_cache": opencl_buf_cache,
+            "ram_leak_warning": ram_leak_warning,
             "ts": now,
         }
         try:
@@ -809,6 +915,76 @@ class WalkerTrainer:
             os.replace(tmp_path, self.stats_path)
         except Exception:
             pass
+
+    def _get_ram_mb(self):
+        try:
+            import psutil
+            return psutil.Process().memory_info().rss / 1024 / 1024
+        except Exception:
+            return 0.0
+
+    def _check_memory(self, force=False):
+        now = time.perf_counter()
+        if not force and now - self._last_ram_check_time < 2.0:
+            return
+        self._last_ram_check_time = now
+        ram_mb = self._get_ram_mb()
+        if ram_mb > self.peak_ram_mb:
+            self.peak_ram_mb = ram_mb
+        try:
+            import psutil
+            total_mb = psutil.virtual_memory().total / 1024 / 1024
+        except Exception:
+            total_mb = 0.0
+        if total_mb <= 0:
+            return
+        usage = ram_mb / total_mb
+        if usage >= 0.95:
+            self._emergency_cleanup()
+        elif usage >= 0.85 and self.episode - self._last_cleanup_update >= 5:
+            self._last_cleanup_update = self.episode
+            self.cleanup_count += 1
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
+            try:
+                opencl_ocl.cleanup()
+            except Exception:
+                pass
+        tensor_count = 0
+        try:
+            import gc
+            tensor_count = sum(1 for o in gc.get_objects() if isinstance(o, torch.Tensor))
+        except Exception:
+            pass
+        if tensor_count > 0 and self._last_tensor_count > 0:
+            if tensor_count > self._last_tensor_count * 1.2 and tensor_count - self._last_tensor_count > 100:
+                print(f"[leak] Possible tensor leak: {self._last_tensor_count} -> {tensor_count} live tensors")
+        self._last_tensor_count = tensor_count
+
+    def _emergency_cleanup(self):
+        self.emergency_cleanup_count += 1
+        print(f"[oom] Emergency cleanup #{self.emergency_cleanup_count} at episode {self.episode}")
+        try:
+            self.save()
+        except Exception:
+            pass
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+        try:
+            opencl_ocl.cleanup()
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     def _launch_fixer(self):
         here = os.path.dirname(os.path.abspath(__file__))
@@ -1041,6 +1217,7 @@ class WalkerTrainer:
                         self.agent.update(batch)
                 dt = time.perf_counter() - t0
                 print(f"  [update] {self.epochs_per_update} epochs over {len(trajectories)} steps in {dt:.2f}s")
+                self._check_memory()
                 trajectories.clear()
 
     def _train_vectorized(self, obs):
@@ -1138,8 +1315,9 @@ class WalkerTrainer:
                         self.agent.update(batch)
                 dt = time.perf_counter() - t0
                 print(f"  [update] {self.epochs_per_update} epochs over {len(flat_trajectories)} steps in {dt:.2f}s")
-
-                trajectories = [[] for _ in range(self.num_envs)]
+                self._check_memory()
+                for t in trajectories:
+                    t.clear()
 
     def _run_inference(self):
         ckpt_path = "best_walker.pt"

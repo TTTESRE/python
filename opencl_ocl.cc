@@ -461,6 +461,12 @@ void invalidate_param_cache() {
     g_param_version.clear();
 }
 
+std::pair<size_t, size_t> get_cache_stats() {
+    size_t param_count = g_param_cache.size();
+    size_t buf_count = g_buf_cache.size();
+    return std::make_pair(param_count, buf_count);
+}
+
 torch::Tensor linear_forward(torch::Tensor weight, torch::Tensor bias, torch::Tensor input) {
     return linear_kernel_dispatch(ocr_k_linear, weight, bias, input);
 }
@@ -573,6 +579,7 @@ PYBIND11_MODULE(opencl_ocl, m) {
     m.def("cleanup", &cleanup_ocl, "Cleanup OpenCL resources");
     m.def("invalidate_params", &invalidate_param_cache, "Clear param version map so next forward re-uploads weights");
     m.def("is_available", []() { ensure_init(); return ocr_device_ready; }, "Check if OpenCL device is ready");
+    m.def("get_cache_stats", &get_cache_stats, "Return (param_cache_size, buf_cache_size)");
 
     m.attr("__library_version__") = "opencl_ocl-2.3.0";
 }

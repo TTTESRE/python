@@ -75,6 +75,25 @@
 - [x] Clean layout with simple HTML + CSS
 - [x] Graceful shutdown on Ctrl+C
 - [x] `laser_speed` in UI is non-zero when laser is active
+- [x] Memory card: current RAM, peak RAM, cleanup counts, leak warning
+- [x] OpenCL cache stats: param_cache size, buf_cache size
+
+## OOM Prevention
+
+- [x] Monitor process RAM (RSS) every 2 seconds via psutil
+- [x] Track peak RAM usage
+- [x] Automatic cleanup at 85% RAM: gc.collect() + opencl_ocl.cleanup()
+- [x] Emergency cleanup at 95% RAM: save checkpoint + gc.collect() + opencl_ocl.cleanup()
+- [x] Continue training automatically after cleanup
+- [x] Retry OpenCL allocation once after cleanup on failure
+- [x] Reuse trajectory lists with `list.clear()` instead of recreating
+- [x] Reuse minibatch tensors via pre-allocated numpy buffers in PPOAgent
+- [x] Avoid unnecessary tensor copies with shared-memory numpy views
+- [x] Detect leaked tensors via gc.get_objects() tensor count trend
+- [x] Detect continuously increasing RAM (warning after 60 rising checks)
+- [x] Expose memory stats in live_stats.json and dashboard UI
+- [x] Added `get_cache_stats()` binding to opencl_ocl for Python-side cache tracking
+- [x] Verified trainer runs with memory monitoring active
 
 ## Verification
 

@@ -45,6 +45,14 @@
     .dot.offline {
       background: #ff4d4f;
     }
+    .dot.warn {
+      background: #ff4d4f;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -78,6 +86,9 @@
     }
     .muted {
       color: #6b7280;
+    }
+    .warn {
+      color: #ff4d4f;
     }
   </style>
 </head>
@@ -117,6 +128,8 @@
       <div class="row"><span class="label">OpenCL calls</span><span class="value" id="ocl_calls">-</span></div>
       <div class="row"><span class="label">ATen calls</span><span class="value" id="aten_calls">-</span></div>
       <div class="row"><span class="label">Fallbacks</span><span class="value" id="fallbacks">-</span></div>
+      <div class="row"><span class="label">Param cache</span><span class="value" id="param_cache">-</span></div>
+      <div class="row"><span class="label">Buf cache</span><span class="value" id="buf_cache">-</span></div>
     </div>
 
     <div class="card">
@@ -126,8 +139,16 @@
     </div>
 
     <div class="card">
-      <h3>System</h3>
+      <h3>Memory</h3>
       <div class="row"><span class="label">RAM</span><span class="value" id="ram">-</span></div>
+      <div class="row"><span class="label">Peak RAM</span><span class="value" id="peak_ram">-</span></div>
+      <div class="row"><span class="label">Cleanups</span><span class="value" id="cleanups">-</span></div>
+      <div class="row"><span class="label">Emergency</span><span class="value" id="emergency">-</span></div>
+      <div class="row"><span class="label">Leak warning</span><span class="value" id="leak">-</span></div>
+    </div>
+
+    <div class="card">
+      <h3>System</h3>
       <div class="row"><span class="label">CPU</span><span class="value" id="cpu">-</span></div>
       <div class="row"><span class="label">Elapsed</span><span class="value" id="elapsed">-</span></div>
     </div>
@@ -168,11 +189,20 @@
       document.getElementById("ocl_calls").textContent = d.opencl_calls ?? "-";
       document.getElementById("aten_calls").textContent = d.aten_calls ?? "-";
       document.getElementById("fallbacks").textContent = d.fallback_count ?? "-";
+      document.getElementById("param_cache").textContent = d.opencl_param_cache ?? "-";
+      document.getElementById("buf_cache").textContent = d.opencl_buf_cache ?? "-";
 
       document.getElementById("k_avg").textContent = typeof d.kernel_time_ms_avg === "number" ? d.kernel_time_ms_avg.toFixed(3) + " ms" : "-";
       document.getElementById("k_total").textContent = typeof d.kernel_time_ms_total === "number" ? d.kernel_time_ms_total.toFixed(3) + " ms" : "-";
 
       document.getElementById("ram").textContent = typeof d.ram_mb === "number" ? d.ram_mb.toFixed(1) + " MB" : "-";
+      document.getElementById("peak_ram").textContent = typeof d.peak_ram_mb === "number" ? d.peak_ram_mb.toFixed(1) + " MB" : "-";
+      document.getElementById("cleanups").textContent = d.opencl_cleanup_count ?? "-";
+      document.getElementById("emergency").textContent = d.emergency_cleanup_count ?? "-";
+      const leakEl = document.getElementById("leak");
+      leakEl.textContent = d.ram_leak_warning ? "YES" : "no";
+      leakEl.className = d.ram_leak_warning ? "value warn" : "value";
+
       document.getElementById("cpu").textContent = typeof d.cpu_pct === "number" ? d.cpu_pct.toFixed(1) + "%" : "-";
       document.getElementById("elapsed").textContent = typeof d.elapsed_sec === "number" ? d.elapsed_sec.toFixed(1) + " s" : "-";
     };
