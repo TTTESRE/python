@@ -38,10 +38,10 @@ std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
 std::unordered_map<size_t, cl_mem> g_buf_cache;
 std::unordered_map<void*, uint64_t> g_param_version;
 
-size_t g_max_param_cache_entries = 64;
-size_t g_max_param_cache_bytes = 256 * 1024 * 1024;
-size_t g_max_buf_cache_entries = 64;
-size_t g_max_buf_cache_bytes = 256 * 1024 * 1024;
+size_t g_max_param_cache_entries = 32;
+size_t g_max_param_cache_bytes = 64 * 1024 * 1024;
+size_t g_max_buf_cache_entries = 32;
+size_t g_max_buf_cache_bytes = 64 * 1024 * 1024;
 
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
@@ -251,6 +251,12 @@ cl_mem get_param_buffer(const float* host, size_t nbytes, bool force_upload = fa
     }
     size_t total_param_bytes = 0;
     for (const auto& kv : g_param_cache) total_param_bytes += kv.second.second;
+    while (g_param_cache.size() >= g_max_param_cache_entries && !g_param_cache.empty()) {
+        auto oldest = g_param_cache.begin();
+        total_param_bytes -= oldest->second.second;
+        clReleaseMemObject(oldest->second.first);
+        g_param_cache.erase(oldest);
+    }
     while (total_param_bytes + nbytes > g_max_param_cache_bytes && !g_param_cache.empty()) {
         auto oldest = g_param_cache.begin();
         total_param_bytes -= oldest->second.second;
@@ -279,20 +285,29 @@ cl_mem alloc_buffer(size_t nbytes) {
 void release_buffer(cl_mem buf) {
     size_t nbytes = 0;
     clGetMemObjectInfo(buf, CL_MEM_SIZE, sizeof(size_t), &nbytes, nullptr);
-    if (nbytes > 0) {
-        if (g_buf_cache.size() >= g_max_buf_cache_entries) {
-            size_t total_bytes = 0;
-            for (const auto& kv : g_buf_cache) total_bytes += kv.first;
-            if (total_bytes + nbytes > g_max_buf_cache_bytes) {
-                auto oldest = g_buf_cache.begin();
-                clReleaseMemObject(oldest->second);
-                g_buf_cache.erase(oldest);
-            }
-        }
-        g_buf_cache[nbytes] = buf;
-    } else {
+    if (nbytes == 0) {
         clReleaseMemObject(buf);
+        return;
     }
+    auto existing = g_buf_cache.find(nbytes);
+    if (existing != g_buf_cache.end()) {
+        clReleaseMemObject(existing->second);
+        g_buf_cache.erase(existing);
+    }
+    while (g_buf_cache.size() >= g_max_buf_cache_entries && !g_buf_cache.empty()) {
+        auto oldest = g_buf_cache.begin();
+        clReleaseMemObject(oldest->second);
+        g_buf_cache.erase(oldest);
+    }
+    size_t total_bytes = 0;
+    for (const auto& kv : g_buf_cache) total_bytes += kv.first;
+    while (total_bytes + nbytes > g_max_buf_cache_bytes && !g_buf_cache.empty()) {
+        auto oldest = g_buf_cache.begin();
+        total_bytes -= oldest->first;
+        clReleaseMemObject(oldest->second);
+        g_buf_cache.erase(oldest);
+    }
+    g_buf_cache[nbytes] = buf;
 }
 
 void run_linear_kernel(cl_kernel k, cl_mem dW, cl_mem dX, cl_mem dB, cl_mem dY, int M, int N, int K) {

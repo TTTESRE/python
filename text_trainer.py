@@ -804,8 +804,8 @@ class WalkerTrainer:
         try:
             ocl_cfg = cfg.get("opencl", {})
             opencl_ocl.set_cache_limits(
-                int(ocl_cfg.get("max_param_cache_mb", 256)),
-                int(ocl_cfg.get("max_buf_cache_mb", 128)),
+                int(ocl_cfg.get("max_param_cache_mb", 64)),
+                int(ocl_cfg.get("max_buf_cache_mb", 32)),
             )
         except Exception:
             pass

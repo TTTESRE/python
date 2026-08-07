@@ -16,6 +16,9 @@ laser_activate_after: 999999
 hidden: 256
 opencl_min_elements: 8192
 compute_chain: opencl,aten
+opencl:
+  max_param_cache_mb: 64
+  max_buf_cache_mb: 32
 num_envs: 16
 fps: 30
 record_video_container: webm
