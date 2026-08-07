@@ -51,6 +51,18 @@
 - [x] dlprimitives attribution comment added to opencl_ocl.cc
 - [x] Kernel timing instrumentation for dashboard performance metrics
 
+## OpenCL Dispatch Debugging
+
+- [x] Defined fallback reason codes: opencl_ok, opencl_unavailable, below_min_elements, opencl_exception, backend_skipped
+- [x] Global dispatch stats tracking next to existing OpenCL counters
+- [x] `_record_dispatch(op, reason)` helper records by reason and by op
+- [x] Instrumented `ocl_linear`, `ocl_relu`, `ocl_tanh`, `ocl_linear_relu`, `ocl_linear_tanh`
+- [x] Instrumented `_try_opencl_*` helpers to record unavailability, size gate failures, and exceptions
+- [x] Periodic `[dispatch]` print every PPO update showing counts and opencl hit rate
+- [x] Dispatch stats exported in `live_stats.json` under `dispatch` key
+- [x] Dashboard HTML shows OpenCL dispatch breakdown: ok%, skipped, below_min, exceptions, last_error
+- [x] Training stable if OpenCL throws (counted, then ATen fallback)
+
 ## Fixers
 
 - [x] `fixer.cc`: attaches GDB to running Python process, forces `pygame.display.flip()` + `pygame.event.pump()` every 33ms

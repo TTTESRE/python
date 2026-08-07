@@ -223,6 +223,26 @@ _start_time = time.perf_counter()
 _last_stats_time = time.perf_counter()
 _last_env_steps = 0
 
+_dispatch_stats = {
+    "opencl_ok": 0,
+    "opencl_unavailable": 0,
+    "below_min_elements": 0,
+    "opencl_exception": 0,
+    "backend_skipped": 0,
+    "aten_calls": 0,
+    "by_op": {},
+    "last_error": None,
+}
+
+
+def _record_dispatch(op: str, reason: str):
+    global _dispatch_stats
+    _dispatch_stats[reason] = _dispatch_stats.get(reason, 0) + 1
+    if reason != "opencl_ok":
+        _dispatch_stats["aten_calls"] = _dispatch_stats.get("aten_calls", 0) + 1
+    by = _dispatch_stats["by_op"].setdefault(op, {})
+    by[reason] = by.get(reason, 0) + 1
+
 
 def set_compute_chain(chain):
     global _compute_chain
@@ -232,83 +252,118 @@ def set_compute_chain(chain):
 
 
 def _try_opencl_linear(x, w, b):
-    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+    if "opencl" not in _compute_chain:
+        return None
+    if not opencl_ocl.is_available():
+        _record_dispatch("linear", "opencl_unavailable")
+        return None
+    if x.numel() * w.shape[0] < _OCL_MIN_ELEMENTS:
+        _record_dispatch("linear", "below_min_elements")
+        return None
+    try:
+        out = OpenCLLinear.apply(x, w, b)
+        _record_dispatch("linear", "opencl_ok")
+        return out
+    except Exception as e:
+        _dispatch_stats["last_error"] = str(e)
+        _record_dispatch("linear", "opencl_exception")
         try:
-            return OpenCLLinear.apply(x, w, b)
+            opencl_ocl.cleanup()
         except Exception:
-            try:
-                opencl_ocl.cleanup()
-            except Exception:
-                pass
-            try:
-                return OpenCLLinear.apply(x, w, b)
-            except Exception:
-                pass
-    return None
+            pass
+        return None
 
 
 def _try_opencl_linear_relu(x, w, b):
-    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+    if "opencl" not in _compute_chain:
+        return None
+    if not opencl_ocl.is_available():
+        _record_dispatch("linear_relu", "opencl_unavailable")
+        return None
+    if x.numel() * w.shape[0] < _OCL_MIN_ELEMENTS:
+        _record_dispatch("linear_relu", "below_min_elements")
+        return None
+    try:
+        out = OpenCLLinearReLU.apply(x, w, b)
+        _record_dispatch("linear_relu", "opencl_ok")
+        return out
+    except Exception as e:
+        _dispatch_stats["last_error"] = str(e)
+        _record_dispatch("linear_relu", "opencl_exception")
         try:
-            return OpenCLLinearReLU.apply(x, w, b)
+            opencl_ocl.cleanup()
         except Exception:
-            try:
-                opencl_ocl.cleanup()
-            except Exception:
-                pass
-            try:
-                return OpenCLLinearReLU.apply(x, w, b)
-            except Exception:
-                pass
-    return None
+            pass
+        return None
 
 
 def _try_opencl_linear_tanh(x, w, b):
-    if opencl_ocl.is_available() and x.numel() * w.shape[0] >= _OCL_MIN_ELEMENTS:
+    if "opencl" not in _compute_chain:
+        return None
+    if not opencl_ocl.is_available():
+        _record_dispatch("linear_tanh", "opencl_unavailable")
+        return None
+    if x.numel() * w.shape[0] < _OCL_MIN_ELEMENTS:
+        _record_dispatch("linear_tanh", "below_min_elements")
+        return None
+    try:
+        out = OpenCLLinearTanh.apply(x, w, b)
+        _record_dispatch("linear_tanh", "opencl_ok")
+        return out
+    except Exception as e:
+        _dispatch_stats["last_error"] = str(e)
+        _record_dispatch("linear_tanh", "opencl_exception")
         try:
-            return OpenCLLinearTanh.apply(x, w, b)
+            opencl_ocl.cleanup()
         except Exception:
-            try:
-                opencl_ocl.cleanup()
-            except Exception:
-                pass
-            try:
-                return OpenCLLinearTanh.apply(x, w, b)
-            except Exception:
-                pass
-    return None
+            pass
+        return None
 
 
 def _try_opencl_relu(x):
-    if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
+    if "opencl" not in _compute_chain:
+        return None
+    if not opencl_ocl.is_available():
+        _record_dispatch("relu", "opencl_unavailable")
+        return None
+    if x.numel() < _OCL_MIN_ELEMENTS:
+        _record_dispatch("relu", "below_min_elements")
+        return None
+    try:
+        out = OpenCLReLU.apply(x)
+        _record_dispatch("relu", "opencl_ok")
+        return out
+    except Exception as e:
+        _dispatch_stats["last_error"] = str(e)
+        _record_dispatch("relu", "opencl_exception")
         try:
-            return OpenCLReLU.apply(x)
+            opencl_ocl.cleanup()
         except Exception:
-            try:
-                opencl_ocl.cleanup()
-            except Exception:
-                pass
-            try:
-                return OpenCLReLU.apply(x)
-            except Exception:
-                pass
-    return None
+            pass
+        return None
 
 
 def _try_opencl_tanh(x):
-    if opencl_ocl.is_available() and x.numel() >= _OCL_MIN_ELEMENTS:
+    if "opencl" not in _compute_chain:
+        return None
+    if not opencl_ocl.is_available():
+        _record_dispatch("tanh", "opencl_unavailable")
+        return None
+    if x.numel() < _OCL_MIN_ELEMENTS:
+        _record_dispatch("tanh", "below_min_elements")
+        return None
+    try:
+        out = OpenCLTanh.apply(x)
+        _record_dispatch("tanh", "opencl_ok")
+        return out
+    except Exception as e:
+        _dispatch_stats["last_error"] = str(e)
+        _record_dispatch("tanh", "opencl_exception")
         try:
-            return OpenCLTanh.apply(x)
+            opencl_ocl.cleanup()
         except Exception:
-            try:
-                opencl_ocl.cleanup()
-            except Exception:
-                pass
-            try:
-                return OpenCLTanh.apply(x)
-            except Exception:
-                pass
-    return None
+            pass
+        return None
 
 
 def ocl_linear(x, w, b):
@@ -321,9 +376,11 @@ def ocl_linear(x, w, b):
                 _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _record_dispatch("linear", "backend_skipped")
             _aten_forwards += 1
             _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.nn.functional.linear(x, w, b)
+    _record_dispatch("linear", "backend_skipped")
     _aten_forwards += 1
     _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.nn.functional.linear(x, w, b)
@@ -339,9 +396,11 @@ def ocl_relu(x):
                 _ocl_samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _record_dispatch("relu", "backend_skipped")
             _aten_forwards += 1
             _aten_samples += x.numel()
             return torch.nn.functional.relu(x)
+    _record_dispatch("relu", "backend_skipped")
     _aten_forwards += 1
     _aten_samples += x.numel()
     return torch.nn.functional.relu(x)
@@ -357,9 +416,11 @@ def ocl_tanh(x):
                 _ocl_samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _record_dispatch("tanh", "backend_skipped")
             _aten_forwards += 1
             _aten_samples += x.numel()
             return torch.tanh(x)
+    _record_dispatch("tanh", "backend_skipped")
     _aten_forwards += 1
     _aten_samples += x.numel()
     return torch.tanh(x)
@@ -375,9 +436,11 @@ def ocl_linear_relu(x, w, b):
                 _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _record_dispatch("linear_relu", "backend_skipped")
             _aten_forwards += 1
             _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
+    _record_dispatch("linear_relu", "backend_skipped")
     _aten_forwards += 1
     _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
@@ -393,9 +456,11 @@ def ocl_linear_tanh(x, w, b):
                 _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _record_dispatch("linear_tanh", "backend_skipped")
             _aten_forwards += 1
             _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.tanh(torch.nn.functional.linear(x, w, b))
+    _record_dispatch("linear_tanh", "backend_skipped")
     _aten_forwards += 1
     _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.tanh(torch.nn.functional.linear(x, w, b))
@@ -900,6 +965,17 @@ class WalkerTrainer:
             "opencl_calls": opencl_calls,
             "aten_calls": aten_calls,
             "fallback_count": fallback_count,
+            "dispatch": {
+                "opencl_ok": _dispatch_stats.get("opencl_ok", 0),
+                "below_min_elements": _dispatch_stats.get("below_min_elements", 0),
+                "opencl_unavailable": _dispatch_stats.get("opencl_unavailable", 0),
+                "opencl_exception": _dispatch_stats.get("opencl_exception", 0),
+                "backend_skipped": _dispatch_stats.get("backend_skipped", 0),
+                "aten_calls": _dispatch_stats.get("aten_calls", 0),
+                "opencl_pct": (100.0 * _dispatch_stats.get("opencl_ok", 0) / max(1, _dispatch_stats.get("opencl_ok", 0) + _dispatch_stats.get("below_min_elements", 0) + _dispatch_stats.get("opencl_unavailable", 0) + _dispatch_stats.get("opencl_exception", 0) + _dispatch_stats.get("backend_skipped", 0))),
+                "by_op": _dispatch_stats.get("by_op", {}),
+                "last_error": _dispatch_stats.get("last_error"),
+            },
             "fwd_per_sec": fwd_per_sec,
             "bwd_per_sec": bwd_per_sec,
             "samples_per_sec": samples_per_sec,
@@ -974,6 +1050,23 @@ class WalkerTrainer:
             if tensor_count > self._last_tensor_count * 1.2 and tensor_count - self._last_tensor_count > 100:
                 print(f"[leak] Possible tensor leak: {self._last_tensor_count} -> {tensor_count} live tensors")
         self._last_tensor_count = tensor_count
+
+    def _print_dispatch_stats(self):
+        stats = _dispatch_stats
+        total = stats.get("opencl_ok", 0) + stats.get("below_min_elements", 0) + stats.get("opencl_unavailable", 0) + stats.get("opencl_exception", 0) + stats.get("backend_skipped", 0)
+        if total == 0:
+            return
+        opencl_pct = 100.0 * stats.get("opencl_ok", 0) / total if total > 0 else 0.0
+        print(f"[dispatch] opencl_ok={stats.get('opencl_ok', 0)} below_min={stats.get('below_min_elements', 0)} unavailable={stats.get('opencl_unavailable', 0)} exception={stats.get('opencl_exception', 0)} skipped={stats.get('backend_skipped', 0)} aten_total={stats.get('aten_calls', 0)} opencl={opencl_pct:.1f}%")
+        by_op = stats.get("by_op", {})
+        if by_op:
+            parts = []
+            for op, counts in by_op.items():
+                parts.append(f"{op}: ok={counts.get('opencl_ok', 0)} below_min={counts.get('below_min_elements', 0)} skipped={counts.get('backend_skipped', 0)}")
+            print(f"[dispatch] by_op: {' | '.join(parts)}")
+        last_err = stats.get("last_error")
+        if last_err:
+            print(f"[dispatch] last_error: {last_err}")
 
     def _emergency_cleanup(self):
         self.emergency_cleanup_count += 1
@@ -1230,6 +1323,7 @@ class WalkerTrainer:
                         self.agent.update(batch)
                 dt = time.perf_counter() - t0
                 print(f"  [update] {self.epochs_per_update} epochs over {len(trajectories)} steps in {dt:.2f}s")
+                self._print_dispatch_stats()
                 self._check_memory()
                 trajectories.clear()
 
@@ -1332,6 +1426,7 @@ class WalkerTrainer:
                         self.agent.update(batch)
                 dt = time.perf_counter() - t0
                 print(f"  [update] {self.epochs_per_update} epochs over {len(flat_trajectories)} steps in {dt:.2f}s")
+                self._print_dispatch_stats()
                 self._check_memory()
                 for t in trajectories:
                     t.clear()

@@ -134,11 +134,14 @@
       <div class="row"><span class="label">Enabled</span><span class="value" id="ocl_enabled">-</span></div>
       <div class="row"><span class="label">Chain</span><span class="value" id="chain">-</span></div>
       <div class="row"><span class="label">Min elements</span><span class="value" id="threshold">-</span></div>
+      <div class="row"><span class="label">OpenCL %</span><span class="value" id="opencl_pct">-</span></div>
       <div class="row"><span class="label">OpenCL calls</span><span class="value" id="ocl_calls">-</span></div>
       <div class="row"><span class="label">ATen calls</span><span class="value" id="aten_calls">-</span></div>
       <div class="row"><span class="label">Fallbacks</span><span class="value" id="fallbacks">-</span></div>
-      <div class="row"><span class="label">Param cache</span><span class="value" id="param_cache">-</span></div>
-      <div class="row"><span class="label">Buf cache</span><span class="value" id="buf_cache">-</span></div>
+      <div class="row"><span class="label">Backend skipped</span><span class="value" id="skipped">-</span></div>
+      <div class="row"><span class="label">Below min</span><span class="value" id="below_min">-</span></div>
+      <div class="row"><span class="label">Exceptions</span><span class="value" id="exceptions">-</span></div>
+      <div class="row"><span class="label">Last error</span><span class="value" id="last_error">-</span></div>
     </div>
 
     <div class="card">
@@ -201,11 +204,17 @@
       document.getElementById("ocl_enabled").textContent = d.opencl_enabled ? "yes" : "no";
       document.getElementById("chain").textContent = Array.isArray(d.compute_chain) ? d.compute_chain.join(",") : "-";
       document.getElementById("threshold").textContent = d.opencl_min_elements ?? "-";
+      const dispatch = d.dispatch || {};
+      document.getElementById("opencl_pct").textContent = typeof dispatch.opencl_pct === "number" ? dispatch.opencl_pct.toFixed(1) + "%" : "-";
       document.getElementById("ocl_calls").textContent = d.opencl_calls ?? "-";
       document.getElementById("aten_calls").textContent = d.aten_calls ?? "-";
       document.getElementById("fallbacks").textContent = d.fallback_count ?? "-";
-      document.getElementById("param_cache").textContent = d.opencl_param_cache ?? "-";
-      document.getElementById("buf_cache").textContent = d.opencl_buf_cache ?? "-";
+      document.getElementById("skipped").textContent = dispatch.backend_skipped ?? "-";
+      document.getElementById("below_min").textContent = dispatch.below_min_elements ?? "-";
+      document.getElementById("exceptions").textContent = dispatch.opencl_exception ?? "-";
+      const lastErrEl = document.getElementById("last_error");
+      lastErrEl.textContent = dispatch.last_error ? dispatch.last_error.substring(0, 60) : "-";
+      lastErrEl.className = dispatch.last_error ? "value warn" : "value";
 
       document.getElementById("k_avg").textContent = typeof d.kernel_time_ms_avg === "number" ? d.kernel_time_ms_avg.toFixed(3) + " ms" : "-";
       document.getElementById("k_total").textContent = typeof d.kernel_time_ms_total === "number" ? d.kernel_time_ms_total.toFixed(3) + " ms" : "-";

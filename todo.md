@@ -1,3 +1,3 @@
-# TODO — Fused: BipedalWalker-v3 defaults + distance/steps reward shaping
+# TODO — Debug: OpenCL miss → ATen fallback
 
 All items completed. See `done.md` for details.
