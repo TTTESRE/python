@@ -49,6 +49,13 @@ def load_config(path=None):
         "compute_chain": ["opencl", "aten"],
         "fps": 30,
         "record_video_container": "webm",
+        "dashboard": {
+            "enabled": True,
+            "host": "0.0.0.0",
+            "port": 8080,
+            "board_fps": 5,
+            "stats_path": "runs/live_stats.json",
+        },
     }
     if os.path.exists(path):
         with open(path, "r") as f:
@@ -64,49 +71,87 @@ def load_config(path=None):
 class OpenCLLinear(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, weight, bias):
+        t0 = time.perf_counter()
         out = opencl_ocl.linear_forward(weight.detach(), bias.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count
+        _kernel_time_total += dt
+        _kernel_time_count += 1
         ctx.save_for_backward(input, weight, bias)
         return out.to(device=input.device, dtype=input.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
         input, weight, bias = ctx.saved_tensors
+        t0 = time.perf_counter()
         grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(grad_output.detach(), weight.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count, _ocl_backwards
+        _kernel_time_total += dt
+        _kernel_time_count += 1
+        _ocl_backwards += 1
         return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
 class OpenCLReLU(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
+        t0 = time.perf_counter()
         out = opencl_ocl.relu_forward(input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count
+        _kernel_time_total += dt
+        _kernel_time_count += 1
         ctx.save_for_backward(input)
         return out.to(device=input.device, dtype=input.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors
+        t0 = time.perf_counter()
         grad_input = opencl_ocl.relu_backward(grad_output.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count, _ocl_backwards
+        _kernel_time_total += dt
+        _kernel_time_count += 1
+        _ocl_backwards += 1
         return grad_input.to(device=input.device, dtype=input.dtype)
 
 
 class OpenCLTanh(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
+        t0 = time.perf_counter()
         out = opencl_ocl.tanh_forward(input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count
+        _kernel_time_total += dt
+        _kernel_time_count += 1
         ctx.save_for_backward(input, out)
         return out.to(device=input.device, dtype=input.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
         input, output = ctx.saved_tensors
+        t0 = time.perf_counter()
         grad_input = opencl_ocl.tanh_backward(grad_output.detach(), output.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count, _ocl_backwards
+        _kernel_time_total += dt
+        _kernel_time_count += 1
+        _ocl_backwards += 1
         return grad_input.to(device=input.device, dtype=input.dtype)
 
 
 class OpenCLLinearReLU(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, weight, bias):
+        t0 = time.perf_counter()
         out = opencl_ocl.linear_relu_forward(weight.detach(), bias.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count
+        _kernel_time_total += dt
+        _kernel_time_count += 1
         ctx.save_for_backward(input, weight, bias)
         return out.to(device=input.device, dtype=input.dtype)
 
@@ -116,14 +161,25 @@ class OpenCLLinearReLU(torch.autograd.Function):
         pre = input @ weight.t() + bias
         mask = (pre > 0).float()
         g = grad_output * mask
+        t0 = time.perf_counter()
         grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(g.detach(), weight.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count, _ocl_backwards
+        _kernel_time_total += dt
+        _kernel_time_count += 1
+        _ocl_backwards += 1
         return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
 class OpenCLLinearTanh(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, weight, bias):
+        t0 = time.perf_counter()
         out = opencl_ocl.linear_tanh_forward(weight.detach(), bias.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count
+        _kernel_time_total += dt
+        _kernel_time_count += 1
         ctx.save_for_backward(input, weight, bias, out)
         return out.to(device=input.device, dtype=input.dtype)
 
@@ -131,7 +187,13 @@ class OpenCLLinearTanh(torch.autograd.Function):
     def backward(ctx, grad_output):
         input, weight, bias, output = ctx.saved_tensors
         d = grad_output * (1 - output ** 2)
+        t0 = time.perf_counter()
         grad_input, grad_weight, grad_bias = opencl_ocl.linear_backward(d.detach(), weight.detach(), input.detach())
+        dt = time.perf_counter() - t0
+        global _kernel_time_total, _kernel_time_count, _ocl_backwards
+        _kernel_time_total += dt
+        _kernel_time_count += 1
+        _ocl_backwards += 1
         return grad_input.to(device=input.device, dtype=input.dtype), grad_weight.to(device=weight.device, dtype=weight.dtype), grad_bias.to(device=bias.device, dtype=bias.dtype)
 
 
@@ -140,6 +202,19 @@ class OpenCLLinearTanh(torch.autograd.Function):
 # faster for small matrices.
 _OCL_MIN_ELEMENTS = 8192
 _compute_chain = ["opencl", "aten"]
+
+_ocl_forwards = 0
+_ocl_backwards = 0
+_aten_forwards = 0
+_aten_backwards = 0
+_ocl_samples = 0
+_aten_samples = 0
+_kernel_time_total = 0.0
+_kernel_time_count = 0
+_env_steps = 0
+_start_time = time.perf_counter()
+_last_stats_time = time.perf_counter()
+_last_env_steps = 0
 
 
 def set_compute_chain(chain):
@@ -180,57 +255,92 @@ def _try_opencl_tanh(x):
 
 
 def ocl_linear(x, w, b):
+    global _ocl_forwards, _aten_forwards, _ocl_samples, _aten_samples
     for backend in _compute_chain:
         if backend == "opencl":
             r = _try_opencl_linear(x, w, b)
             if r is not None:
+                _ocl_forwards += 1
+                _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _aten_forwards += 1
+            _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.nn.functional.linear(x, w, b)
+    _aten_forwards += 1
+    _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.nn.functional.linear(x, w, b)
 
 
 def ocl_relu(x):
+    global _ocl_forwards, _aten_forwards, _ocl_samples, _aten_samples
     for backend in _compute_chain:
         if backend == "opencl":
             r = _try_opencl_relu(x)
             if r is not None:
+                _ocl_forwards += 1
+                _ocl_samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _aten_forwards += 1
+            _aten_samples += x.numel()
             return torch.nn.functional.relu(x)
+    _aten_forwards += 1
+    _aten_samples += x.numel()
     return torch.nn.functional.relu(x)
 
 
 def ocl_tanh(x):
+    global _ocl_forwards, _aten_forwards, _ocl_samples, _aten_samples
     for backend in _compute_chain:
         if backend == "opencl":
             r = _try_opencl_tanh(x)
             if r is not None:
+                _ocl_forwards += 1
+                _ocl_samples += x.numel()
                 return r
         elif backend in ("aten", "cpu"):
+            _aten_forwards += 1
+            _aten_samples += x.numel()
             return torch.tanh(x)
+    _aten_forwards += 1
+    _aten_samples += x.numel()
     return torch.tanh(x)
 
 
 def ocl_linear_relu(x, w, b):
+    global _ocl_forwards, _aten_forwards, _ocl_samples, _aten_samples
     for backend in _compute_chain:
         if backend == "opencl":
             r = _try_opencl_linear_relu(x, w, b)
             if r is not None:
+                _ocl_forwards += 1
+                _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _aten_forwards += 1
+            _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
+    _aten_forwards += 1
+    _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.nn.functional.relu(torch.nn.functional.linear(x, w, b))
 
 
 def ocl_linear_tanh(x, w, b):
+    global _ocl_forwards, _aten_forwards, _ocl_samples, _aten_samples
     for backend in _compute_chain:
         if backend == "opencl":
             r = _try_opencl_linear_tanh(x, w, b)
             if r is not None:
+                _ocl_forwards += 1
+                _ocl_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
                 return r
         elif backend in ("aten", "cpu"):
+            _aten_forwards += 1
+            _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
             return torch.tanh(torch.nn.functional.linear(x, w, b))
+    _aten_forwards += 1
+    _aten_samples += x.numel() // w.shape[0] if x.dim() > 1 else 1
     return torch.tanh(torch.nn.functional.linear(x, w, b))
 
 
@@ -492,6 +602,8 @@ class WalkerTrainer:
         self.video_path = video_path or ("run_inference.webm" if container == "webm" else "run_inference.mp4")
         self.container = container
         self.checkpoint_path = "walker_checkpoint.pt"
+        self.log_path = "runs/walker_log.csv"
+        self.stats_path = cfg.get("dashboard", {}).get("stats_path", "runs/live_stats.json")
         self.ffmpeg_proc = None
         self.fixer_proc = None
         self.fixer_opencl_proc = None
@@ -576,6 +688,7 @@ class WalkerTrainer:
                 self.writer.add_scalar("laser/speed", laser_speed, episode)
             except Exception:
                 pass
+        self._publish_live_stats(episode, reward, steps, laser_speed)
         return avg
 
     def _stop_logging(self):
@@ -586,6 +699,67 @@ class WalkerTrainer:
             except Exception:
                 pass
             self.writer = None
+
+    def _publish_live_stats(self, episode, reward, steps, laser_speed):
+        global _ocl_forwards, _ocl_backwards, _aten_forwards, _aten_backwards
+        global _ocl_samples, _aten_samples, _kernel_time_total, _kernel_time_count
+        global _env_steps, _start_time, _last_stats_time, _last_env_steps
+        now = time.perf_counter()
+        elapsed = now - _start_time
+        dt = now - _last_stats_time
+        env_steps_delta = _env_steps - _last_env_steps
+        env_steps_per_sec = env_steps_delta / dt if dt > 0 else 0.0
+        _last_stats_time = now
+        _last_env_steps = _env_steps
+        opencl_calls = _ocl_forwards + _ocl_backwards
+        aten_calls = _aten_forwards + _aten_backwards
+        fallback_count = _aten_forwards
+        fwd_per_sec = (_ocl_forwards + _aten_forwards) / elapsed if elapsed > 0 else 0.0
+        bwd_per_sec = (_ocl_backwards + _aten_backwards) / elapsed if elapsed > 0 else 0.0
+        samples_per_sec = (_ocl_samples + _aten_samples) / elapsed if elapsed > 0 else 0.0
+        kernel_time_ms_avg = (_kernel_time_total / _kernel_time_count * 1000.0) if _kernel_time_count > 0 else 0.0
+        kernel_time_ms_total = _kernel_time_total * 1000.0
+        ram_mb = 0.0
+        cpu_pct = 0.0
+        try:
+            import psutil
+            ram_mb = psutil.Process().memory_info().rss / 1024 / 1024
+            cpu_pct = psutil.Process().cpu_percent()
+        except Exception:
+            pass
+        stats = {
+            "episode": episode,
+            "reward": reward,
+            "avg50": sum(self.recent_rewards) / len(self.recent_rewards) if self.recent_rewards else 0.0,
+            "best_reward": self.best_reward,
+            "steps": steps,
+            "laser_speed": laser_speed,
+            "opencl_enabled": opencl_ocl.is_available(),
+            "compute_chain": list(self.compute_chain),
+            "opencl_min_elements": int(_OCL_MIN_ELEMENTS),
+            "opencl_calls": opencl_calls,
+            "aten_calls": aten_calls,
+            "fallback_count": fallback_count,
+            "fwd_per_sec": fwd_per_sec,
+            "bwd_per_sec": bwd_per_sec,
+            "samples_per_sec": samples_per_sec,
+            "env_steps_per_sec": env_steps_per_sec,
+            "kernel_time_ms_avg": kernel_time_ms_avg,
+            "kernel_time_ms_total": kernel_time_ms_total,
+            "ram_mb": ram_mb,
+            "cpu_pct": cpu_pct,
+            "elapsed_sec": elapsed,
+            "ts": now,
+        }
+        try:
+            os.makedirs(os.path.dirname(self.stats_path), exist_ok=True)
+            tmp_path = self.stats_path + ".tmp"
+            with open(tmp_path, "w") as f:
+                import json
+                json.dump(stats, f)
+            os.replace(tmp_path, self.stats_path)
+        except Exception:
+            pass
 
     def _launch_fixer(self):
         here = os.path.dirname(os.path.abspath(__file__))
@@ -766,6 +940,8 @@ class WalkerTrainer:
             episode_steps += 1
             obs = next_obs
             total_steps += 1
+            global _env_steps
+            _env_steps += 1
 
             if done or episode_steps >= self.max_steps:
                 self.episode += 1
@@ -846,6 +1022,8 @@ class WalkerTrainer:
             ep_rewards += rewards
             ep_steps += 1
             total_steps += self.num_envs
+            global _env_steps
+            _env_steps += self.num_envs
             obs = next_obs
 
             for i in range(self.num_envs):
