@@ -1,7 +1,7 @@
 env: BipedalWalker-v3
 max_episodes: 5000
 max_steps: 1600
-update_interval: 4096
+update_interval: 2048
 mini_batch_size: 512
 epochs_per_update: 6
 lr: 2.0e-4
@@ -13,10 +13,10 @@ vf_coef: 0.5
 laser_range: 2.0
 laser_speed: 0.025
 laser_activate_after: 999999
-hidden: 512
+hidden: 256
 opencl_min_elements: 8192
 compute_chain: opencl,aten
-num_envs: 32
+num_envs: 16
 fps: 30
 record_video_container: webm
 reward:

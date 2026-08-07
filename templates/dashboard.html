@@ -141,6 +141,10 @@
       <div class="row"><span class="label">Backend skipped</span><span class="value" id="skipped">-</span></div>
       <div class="row"><span class="label">Below min</span><span class="value" id="below_min">-</span></div>
       <div class="row"><span class="label">Exceptions</span><span class="value" id="exceptions">-</span></div>
+      <div class="row"><span class="label">Param cache</span><span class="value" id="param_cache">-</span></div>
+      <div class="row"><span class="label">Param MB</span><span class="value" id="param_mb">-</span></div>
+      <div class="row"><span class="label">Buf cache</span><span class="value" id="buf_cache">-</span></div>
+      <div class="row"><span class="label">Buf MB</span><span class="value" id="buf_mb">-</span></div>
       <div class="row"><span class="label">Last error</span><span class="value" id="last_error">-</span></div>
     </div>
 
@@ -212,6 +216,10 @@
       document.getElementById("skipped").textContent = dispatch.backend_skipped ?? "-";
       document.getElementById("below_min").textContent = dispatch.below_min_elements ?? "-";
       document.getElementById("exceptions").textContent = dispatch.opencl_exception ?? "-";
+      document.getElementById("param_cache").textContent = d.opencl_param_cache ?? "-";
+      document.getElementById("param_mb").textContent = typeof d.opencl_param_bytes === "number" ? (d.opencl_param_bytes / 1024 / 1024).toFixed(1) + " MB" : "-";
+      document.getElementById("buf_cache").textContent = d.opencl_buf_cache ?? "-";
+      document.getElementById("buf_mb").textContent = typeof d.opencl_buf_bytes === "number" ? (d.opencl_buf_bytes / 1024 / 1024).toFixed(1) + " MB" : "-";
       const lastErrEl = document.getElementById("last_error");
       lastErrEl.textContent = dispatch.last_error ? dispatch.last_error.substring(0, 60) : "-";
       lastErrEl.className = dispatch.last_error ? "value warn" : "value";

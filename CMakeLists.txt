@@ -15,4 +15,4 @@ find_library(TORCH_PYTHON_LIBRARY NAMES torch_python PATHS ${TORCH_LIB_DIR} NO_D
 
 pybind11_add_module(opencl_ocl opencl_ocl.cc)
 target_link_libraries(opencl_ocl PRIVATE torch ${TORCH_PYTHON_LIBRARY} OpenCL::OpenCL)
-target_compile_options(opencl_ocl PRIVATE -O3 -std=c++17)
+target_compile_options(opencl_ocl PRIVATE -O3 -march=native -std=c++17)

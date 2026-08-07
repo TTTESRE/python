@@ -38,6 +38,10 @@ std::unordered_map<void*, std::pair<cl_mem, size_t>> g_param_cache;
 std::unordered_map<size_t, cl_mem> g_buf_cache;
 std::unordered_map<void*, uint64_t> g_param_version;
 
+constexpr size_t kMaxParamCacheEntries = 64;
+constexpr size_t kMaxBufCacheEntries = 64;
+constexpr size_t kMaxBufCacheBytes = 256 * 1024 * 1024;
+
 const char* CL_SOURCE_SGEMM_HEAD = R"(
 __kernel void sgemm(__global const float* W,
                     __global const float* X,
@@ -244,6 +248,11 @@ cl_mem get_param_buffer(const float* host, size_t nbytes, bool force_upload = fa
         }
         return it->second.first;
     }
+    if (g_param_cache.size() >= kMaxParamCacheEntries) {
+        auto oldest = g_param_cache.begin();
+        clReleaseMemObject(oldest->second.first);
+        g_param_cache.erase(oldest);
+    }
     cl_mem buf = clCreateBuffer(ocr_ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, nbytes, const_cast<float*>(host), nullptr);
     if (!buf) throw std::runtime_error("Failed to allocate OpenCL param buffer");
     g_param_cache[key] = {buf, nbytes};
@@ -267,6 +276,15 @@ void release_buffer(cl_mem buf) {
     size_t nbytes = 0;
     clGetMemObjectInfo(buf, CL_MEM_SIZE, sizeof(size_t), &nbytes, nullptr);
     if (nbytes > 0) {
+        if (g_buf_cache.size() >= kMaxBufCacheEntries) {
+            size_t total_bytes = 0;
+            for (const auto& kv : g_buf_cache) total_bytes += kv.first;
+            if (total_bytes + nbytes > kMaxBufCacheBytes) {
+                auto oldest = g_buf_cache.begin();
+                clReleaseMemObject(oldest->second);
+                g_buf_cache.erase(oldest);
+            }
+        }
         g_buf_cache[nbytes] = buf;
     } else {
         clReleaseMemObject(buf);
@@ -361,7 +379,7 @@ torch::Tensor linear_kernel_dispatch(cl_kernel k, torch::Tensor weight, torch::T
     return out;
 }
 
-torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B, torch::Tensor bias) {
+torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B, torch::Tensor bias, bool cache_b = false) {
     ensure_init();
     auto a = A.contiguous().to(torch::kFloat32);
     auto b = B.contiguous().to(torch::kFloat32);
@@ -382,8 +400,8 @@ torch::Tensor std_kernel_dispatch(cl_kernel k, torch::Tensor A, torch::Tensor B,
     float* op = out.data_ptr<float>();
 
     cl_mem dA = alloc_buffer((size_t)M * K * sizeof(float));
-    cl_mem dB = get_param_buffer(bp, (size_t)K * N * sizeof(float), false);
-    cl_mem dBias = get_param_buffer(biasp, (size_t)N * sizeof(float), false);
+    cl_mem dB = cache_b ? get_param_buffer(bp, (size_t)K * N * sizeof(float), false) : alloc_buffer((size_t)K * N * sizeof(float));
+    cl_mem dBias = cache_b ? get_param_buffer(biasp, (size_t)N * sizeof(float), false) : alloc_buffer((size_t)N * sizeof(float));
     cl_mem dC = alloc_buffer((size_t)M * N * sizeof(float));
 
     clEnqueueWriteBuffer(ocr_queue, dA, CL_TRUE, 0, (size_t)M * K * sizeof(float), ap, 0, nullptr, nullptr);
@@ -461,10 +479,36 @@ void invalidate_param_cache() {
     g_param_version.clear();
 }
 
+void drop_param_cache() {
+    for (auto& kv : g_param_cache) clReleaseMemObject(kv.second.first);
+    g_param_cache.clear();
+    g_param_version.clear();
+}
+
+void drop_scratch_cache() {
+    for (auto& kv : g_buf_cache) clReleaseMemObject(kv.second);
+    g_buf_cache.clear();
+}
+
 std::pair<size_t, size_t> get_cache_stats() {
     size_t param_count = g_param_cache.size();
     size_t buf_count = g_buf_cache.size();
     return std::make_pair(param_count, buf_count);
+}
+
+py::dict cache_stats() {
+    size_t param_entries = g_param_cache.size();
+    size_t buf_entries = g_buf_cache.size();
+    size_t param_bytes = 0;
+    for (const auto& kv : g_param_cache) param_bytes += kv.second.second;
+    size_t buf_bytes = 0;
+    for (const auto& kv : g_buf_cache) buf_bytes += kv.first;
+    py::dict d;
+    d["param_entries"] = param_entries;
+    d["param_bytes"] = param_bytes;
+    d["buf_entries"] = buf_entries;
+    d["buf_bytes"] = buf_bytes;
+    return d;
 }
 
 torch::Tensor linear_forward(torch::Tensor weight, torch::Tensor bias, torch::Tensor input) {
@@ -501,10 +545,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> linear_backward(
     auto zero_bias = torch::zeros({N}, torch::kFloat32);
 
     // grad_input = go @ W  (M, output) @ (output, input) = (M, input)
-    auto grad_input = std_kernel_dispatch(ocr_k_linear_bwd, go, W, zero_bias);
+    auto grad_input = std_kernel_dispatch(ocr_k_linear_bwd, go, W, zero_bias, true);
 
     // grad_weight = go.T @ X  (output, M) @ (M, input) = (output, input)
-    auto grad_weight = std_kernel_dispatch(ocr_k_linear_bwd, go.t(), X, zero_bias);
+    auto grad_weight = std_kernel_dispatch(ocr_k_linear_bwd, go.t(), X, zero_bias, false);
 
     // grad_bias = go.sum(0) (output,)
     auto grad_bias = go.sum(0);
@@ -526,7 +570,7 @@ torch::Tensor relu_backward(torch::Tensor grad_output, torch::Tensor input) {
     const float* xp = X.data_ptr<float>();
     float* op = out.data_ptr<float>();
     cl_mem dG = alloc_buffer((size_t)n * sizeof(float));
-    cl_mem dX = get_param_buffer(xp, (size_t)n * sizeof(float), false);
+    cl_mem dX = alloc_buffer((size_t)n * sizeof(float));
     cl_mem dO = alloc_buffer((size_t)n * sizeof(float));
     clEnqueueWriteBuffer(ocr_queue, dG, CL_TRUE, 0, (size_t)n * sizeof(float), gp, 0, nullptr, nullptr);
     clEnqueueWriteBuffer(ocr_queue, dX, CL_TRUE, 0, (size_t)n * sizeof(float), xp, 0, nullptr, nullptr);
@@ -578,6 +622,9 @@ PYBIND11_MODULE(opencl_ocl, m) {
     m.def("tanh_backward", &tanh_backward, "Tanh backward (OpenCL)");
     m.def("cleanup", &cleanup_ocl, "Cleanup OpenCL resources");
     m.def("invalidate_params", &invalidate_param_cache, "Clear param version map so next forward re-uploads weights");
+    m.def("drop_param_cache", &drop_param_cache, "Drop param device buffers (force re-upload on next forward)");
+    m.def("drop_scratch_cache", &drop_scratch_cache, "Drop scratch buffers from g_buf_cache");
+    m.def("cache_stats", &cache_stats, "Return dict with param/buf entries and bytes");
     m.def("is_available", []() { ensure_init(); return ocr_device_ready; }, "Check if OpenCL device is ready");
     m.def("get_cache_stats", &get_cache_stats, "Return (param_cache_size, buf_cache_size)");
 

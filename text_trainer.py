@@ -63,6 +63,11 @@ def load_config(path=None):
             "board_fps": 5,
             "stats_path": "runs/live_stats.json",
         },
+        "opencl": {
+            "max_param_cache_mb": 256,
+            "max_buf_cache_mb": 128,
+            "drop_scratch_each_update": False,
+        },
     }
     if os.path.exists(path):
         with open(path, "r") as f:
@@ -617,6 +622,12 @@ class PPOAgent:
         torch.nn.utils.clip_grad_norm_(self.value.parameters(), 0.5)
         self.optimizer.step()
         opencl_ocl.invalidate_params()
+        del obs, acts, old_logp, returns, advantages, mean, std, dist, new_logp, ratio, surr1, surr2, policy_loss, value_loss, loss
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
         return policy_loss.item(), value_loss.item(), entropy.item()
 
 
@@ -946,8 +957,14 @@ class WalkerTrainer:
             ram_leak_warning = True
         opencl_param_cache = 0
         opencl_buf_cache = 0
+        opencl_param_bytes = 0
+        opencl_buf_bytes = 0
         try:
-            opencl_param_cache, opencl_buf_cache = opencl_ocl.get_cache_stats()
+            cache = opencl_ocl.cache_stats()
+            opencl_param_cache = cache.get("param_entries", 0)
+            opencl_param_bytes = cache.get("param_bytes", 0)
+            opencl_buf_cache = cache.get("buf_entries", 0)
+            opencl_buf_bytes = cache.get("buf_bytes", 0)
         except Exception:
             pass
         stats = {
@@ -990,6 +1007,8 @@ class WalkerTrainer:
             "emergency_cleanup_count": self.emergency_cleanup_count,
             "opencl_param_cache": opencl_param_cache,
             "opencl_buf_cache": opencl_buf_cache,
+            "opencl_param_bytes": opencl_param_bytes,
+            "opencl_buf_bytes": opencl_buf_bytes,
             "ram_leak_warning": ram_leak_warning,
             "ts": now,
         }
@@ -1050,6 +1069,16 @@ class WalkerTrainer:
             if tensor_count > self._last_tensor_count * 1.2 and tensor_count - self._last_tensor_count > 100:
                 print(f"[leak] Possible tensor leak: {self._last_tensor_count} -> {tensor_count} live tensors")
         self._last_tensor_count = tensor_count
+
+        try:
+            cache = opencl_ocl.cache_stats()
+            param_entries = cache.get("param_entries", 0)
+            param_bytes = cache.get("param_bytes", 0)
+            buf_entries = cache.get("buf_entries", 0)
+            buf_bytes = cache.get("buf_bytes", 0)
+            print(f"[mem] rss_mb={ram_mb:.1f} ocl_param_entries={param_entries} ocl_param_mb={param_bytes/1024/1024:.1f} ocl_buf_entries={buf_entries} ocl_buf_mb={buf_bytes/1024/1024:.1f}")
+        except Exception:
+            pass
 
     def _print_dispatch_stats(self):
         stats = _dispatch_stats
