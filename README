@@ -87,10 +87,12 @@ python text_trainer.py --run
 ## Build a wheel locally
 
 ```bash
-python -m build --wheel
+python setup.py bdist_wheel
 ```
 
-This produces a platform-specific wheel in `dist/`, e.g. `opencl_ocl-0.1.1-cp312-cp312-linux_x86_64.whl`.
+This produces a platform-specific wheel in `dist/`, e.g. `opencl_ocl-0.1.1-cp312-cp312-linux_x86_64.whl`. This wheel is built for the local Linux x86_64 platform and may not be portable to other Linux distributions.
+
+For true manylinux-compatible wheels that work across Linux distributions, the project uses GitHub Actions with cibuildwheel. Push a tag `v*` to trigger the workflow.
 
 ## Requirements
 
@@ -100,16 +102,22 @@ This produces a platform-specific wheel in `dist/`, e.g. `opencl_ocl-0.1.1-cp312
 - pybind11
 - gymnasium, pygame, numpy, pyyaml, psutil, flask
 
-## License
+## Building from source
 
-MIT — see `LICENSE` for details.
+```bash
+# Install build dependencies
+pip install cmake pybind11 setuptools wheel
 
-## Attribution
+# Build the extension
+python setup_ocl.py
 
-Tiled SGEMM kernel adapted from [dlprimitives](https://github.com/artyom-beilis/dlprimitives) (MIT License, Artyom Beilis).
+# Or build a wheel
+python setup.py bdist_wheel
+```
 
-## PyPI / CI
+## PyPI
 
 - Package: https://pypi.org/project/opencl-ocl/
 - Source: https://github.com/TTTESRE/python
-- manylinux wheels are built automatically via GitHub Actions on tags (`v*`). The workflow uses cibuildwheel inside a manylinux container to produce portable Linux wheels.
+- Install: `pip install opencl-ocl`
+- Note: The PyPI package is currently a source distribution (sdist). It will build from source on install. A manylinux wheel is produced automatically by the GitHub Actions workflow on tags.
