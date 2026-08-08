@@ -1,15 +1,25 @@
 # BipedalWalker OpenCL PPO Trainer
 
-> **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python, The text_trainer.py and dashboard*.py are tests for testing the kernel the main project is opencl_ocl.cc.
+> **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python, The text_trainer.py and dashboard*.py are test for testing the kernel the main project is opencl_ocl.cc.
 
 ## How to Install
+
 ```bash
 pip install opencl-ocl
 ```
+
 or if you use uv
+
 ```bash
 uv pip install opencl-ocl
 ```
+
+**Note:** The published package on PyPI is a source distribution (sdist). It requires:
+- Python 3.10+
+- PyTorch >= 2.0 (`pip install torch` before or alongside `opencl-ocl`)
+- OpenCL ICD loader/runtime for GPU acceleration (CPU/ATen fallback always works)
+
+For Linux x86_64, a pre-built wheel is also available on PyPI. For other platforms, the sdist will build from source on install.
 
 ## What this is
 
@@ -23,6 +33,7 @@ uv pip install opencl-ocl
 - Live web dashboard (`dashboard_server.py`) via Flask + SSE
 - OpenCL cache limits configurable via `opencl:` section in `config.yaml`
 - Per-update memory logging and dashboard cache stats
+- Automatic fallback to PyTorch CPU (ATen) if OpenCL is unavailable
 
 ## Key files
 
@@ -45,6 +56,8 @@ uv pip install opencl-ocl
 ```bash
 python setup_ocl.py
 ```
+
+This builds `opencl_ocl/opencl_ocl.cpython-312-x86_64-linux-gnu.so` (or similar for your Python version).
 
 ## Train
 
@@ -71,11 +84,19 @@ http://127.0.0.1:8080
 python text_trainer.py --run
 ```
 
+## Build a wheel locally
+
+```bash
+python -m build --wheel
+```
+
+This produces a platform-specific wheel in `dist/`, e.g. `opencl_ocl-0.1.1-cp312-cp312-linux_x86_64.whl`.
+
 ## Requirements
 
-- Python 3.12+
-- PyTorch with libtorch
-- OpenCL SDK / ICD
+- Python 3.10+
+- PyTorch >= 2.0 with libtorch
+- OpenCL SDK / ICD (for GPU acceleration; CPU fallback always works)
 - pybind11
 - gymnasium, pygame, numpy, pyyaml, psutil, flask
 
@@ -86,3 +107,9 @@ MIT — see `LICENSE` for details.
 ## Attribution
 
 Tiled SGEMM kernel adapted from [dlprimitives](https://github.com/artyom-beilis/dlprimitives) (MIT License, Artyom Beilis).
+
+## PyPI / CI
+
+- Package: https://pypi.org/project/opencl-ocl/
+- Source: https://github.com/TTTESRE/python
+- manylinux wheels are built automatically via GitHub Actions on tags (`v*`). The workflow uses cibuildwheel inside a manylinux container to produce portable Linux wheels.
