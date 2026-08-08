@@ -2,7 +2,7 @@
 
 > **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python, The text_trainer.py and dashboard*.py are test for testing the kernel the main project is opencl_ocl.cc.
 
-## How to Install
+## How to Install If you have archlinux
 
 ```bash
 pip install opencl-ocl
@@ -13,7 +13,12 @@ or if you use uv
 ```bash
 uv pip install opencl-ocl
 ```
-
+## How to Install if you have non-archlinux
+```bash
+git clone github.com/tttesre/python
+cd python
+python setup_ocl.py && python setup.py bdist_wheel
+pip install $(find . | grep opencl*.whl)
 **Note:** The published package on PyPI is a source distribution (sdist). It requires:
 - Python 3.10+
 - PyTorch >= 2.0 (`pip install torch` before or alongside `opencl-ocl`)
