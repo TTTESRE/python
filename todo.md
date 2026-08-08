@@ -1,120 +1,159 @@
-# TODO — RAM growth: GC not reclaiming (OpenCL cache + Python)
+# TODO — Wheel → manylinux → PyPI for `opencl_ocl` (DEFERRED)
 
 ## Goal
 
-Stop RAM from climbing every PPO update.  
-**Root issue:** device/host buffers are retained so GC has nothing to free. Fix ownership first; `gc.collect()` only helps after that.
+> **Deferred:** User will handle PyPI upload later. Local wheel / manylinux packaging work is on hold until then.
+
+1. Build a real **`.whl`**
+2. Produce **manylinux**-compatible wheels (broader Linux installs)
+3. **Upload to PyPI** so:
+
+```bash
+pip install opencl-ocl
+```
+
+works without grabbing a raw `.so` from GitHub.
 
 ---
 
-## High Priority — OpenCL: stop leaking `cl_mem`
+## Phase 0 — already true
 
-- [x] **Never** put activations / grads into `g_param_cache`
-  - `g_param_cache` = **weights/bias only** (stable `data_ptr`)
-  - Backward inputs (`X`, `G`, temps) use `alloc_buffer` + `release_buffer` only
-
-- [x] Audit every `get_param_buffer(...)` call
-  - [x] Forward weights/bias → OK
-  - [x] `relu_backward` / `tanh_backward` / `linear_backward` activations → **must not** use param cache
-  - [x] Any `get_param_buffer` on non-parameter host pointer → convert to alloc/release
-
-- [x] Cap `g_buf_cache` (scratch pool)
-  - Max entries per size (e.g. 2–4) or max total bytes
-  - On overflow: `clReleaseMemObject` oldest / extras
-
-- [x] Cap or periodically flush `g_param_cache`
-  - Option A: `invalidate_params()` clears versions **and** optionally releases mem if over budget
-  - Option B: hard clear param device buffers every N updates (re-upload next forward)
-  - Option C: expose `opencl_ocl.cache_stats()` → `{param_entries, param_bytes, buf_entries, buf_bytes}`
-
-- [x] Ensure every `alloc_buffer` path has matching `release_buffer` (including exception paths)
+- [x] At least one external download / interest signal
+- [x] Extension builds locally (`.so`)
+- [x] ATen fallback + bounded OpenCL cache
 
 ---
 
-## High Priority — prove the leak
+## Phase 1 — local wheel (block PyPI until this is green)
 
-- [x] A/B test
-  ```yaml
-  compute_chain: aten      # RAM should stabilize if leak is OpenCL
+- [x] Package layout + `pyproject.toml` (name, version, MIT, `requires-python`)
+- [x] CMake/pybind build integrated with setuptools (adapt `setup_ocl.py`)
+- [x] Import name stays `opencl_ocl` for `text_trainer.py`
+- [x] `python -m build --wheel` on your machine
+- [x] Clean venv: `pip install dist/*.whl` → `import opencl_ocl; opencl_ocl.is_available()`
+- [x] Trainer runs with wheel install only (no manual `.so` copy)
+
+**PyPI name:** claim something clear, e.g. `opencl-ocl` or `torch-opencl-ocl`  
+**Import name:** `opencl_ocl`
+
+---
+
+## Phase 2 — manylinux (Linux portability)
+
+manylinux = wheel built inside a **CentOS/Alma-based container** with old glibc so it runs on most modern Linux distros.
+
+- [ ] Use **cibuildwheel** or official manylinux image
+  ```bash
+  # typical approach
+  pip install cibuildwheel
+  # CIBW builds wheels inside quay.io/pypa/manylinux_* containers
   ```
-  vs `opencl,aten`
 
-- [x] Log each update
-  ```text
-  [mem] rss_mb=...  ocl_param_entries=...  ocl_param_mb=...  ocl_buf_entries=...
+- [ ] Config in `pyproject.toml`
+  ```toml
+  [tool.cibuildwheel]
+  build = "cp310-* cp311-* cp312-*"
+  archs = ["x86_64"]          # start here; aarch64 later
+  skip = "pp* *-musllinux_*"  # optional
+
+  [tool.cibuildwheel.linux]
+  before-all = "yum install -y ocl-icd ocl-icd-devel || true"
+  # OpenCL **headers/ICD** in the image; runtime still needs user GPU ICD
   ```
-- [x] Dashboard: already has RAM / peak — add OpenCL cache entry counts if exported
+
+- [ ] Torch dependency strategy (important)
+  - **Build** against a known torch version in the container
+  - Document: user must install **compatible torch** first (`pip install torch` then `opencl-ocl`)
+  - Or depend on `torch` in metadata and accept large/resolver pain
+
+- [ ] Repair wheel with `auditwheel repair` (cibuildwheel does this)
+  - Bundles allowed libs; **does not** ship GPU drivers
+  - OpenCL stays **delay-loaded / runtime ICD** on the user machine
+
+- [ ] Smoke test manylinux wheel on a **different** Linux box/VM (not the build host)
+
+### OpenCL + manylinux reality check
+
+| Piece | In the wheel? |
+|--------|----------------|
+| Your `.so` ops | Yes |
+| libOpenCL / ICD loader | Sometimes (careful with auditwheel) |
+| Vendor GPU driver | **Never** — user installs |
+| Works headless CPU-only | Yes via ATen if you keep fallback |
+
+Document: **“Needs OpenCL ICD for GPU path; CPU/ATen always works.”**
 
 ---
 
-## High Priority — Python side (after OpenCL fix)
+## Phase 3 — PyPI upload
 
-- [x] In `PPOAgent.update` mini-batch loop
-  - Build tensors → forward → backward → `optimizer.step()` → `invalidate_params()`
-  - Do **not** keep lists of loss tensors across mini-batches
-  - Prefer `with torch.no_grad():` for anything not needed for grad
-
-- [x] After full update (all epochs)
-  ```python
-  del obs, acts, old_logp, returns, advantages, batch
-  # optional:
-  gc.collect()
+- [ ] Create account on **https://pypi.org** (+ enable 2FA)
+- [ ] Test upload to **TestPyPI** first
+  ```bash
+  pip install twine
+  twine check dist/*
+  twine upload --repository testpypi dist/*
+  pip install -i https://test.pypi.org/simple/ opencl-ocl
   ```
-  - Only useful once C++ isn’t holding `cl_mem` forever
 
-- [x] Trajectory buffer
-  - After update: `trajectories = [[] for _ in range(num_envs)]` (already)
-  - Avoid retaining `flat_trajectories` after the update block (`del flat_trajectories`)
+- [ ] Project metadata on PyPI
+  - Long description = README (MIT, OpenCL purpose, fallback)
+  - Classifiers: OS Independent / Linux, AI, scientific
+  - Links: GitHub repo, issues
 
-- [x] Do **not** call `opencl_ocl.cleanup()` every step (rebuilds kernels); only on shutdown or emergency
+- [ ] Production upload
+  ```bash
+  twine upload dist/*
+  ```
+
+- [ ] Version bump policy: `0.1.0` → `0.1.1` for fixes; no overwrite of published versions
+
+- [ ] GitHub Release: same version tag + attach wheels as backup
 
 ---
 
-## Medium Priority — API / debug hooks
+## Phase 4 — CI (so you’re not the only builder)
 
-- [x] Export from `opencl_ocl`
-  ```text
-  cache_stats() -> dict
-  drop_scratch_cache()     # clear g_buf_cache only
-  drop_param_cache()       # clear g_param_cache (force re-upload)
-  ```
-- [x] Config
-  ```yaml
-  opencl:
-    max_param_cache_mb: 256
-    max_buf_cache_mb: 128
-    drop_scratch_each_update: false
-  ```
-- [x] Dispatch debug: unchanged; mem is separate
-
----
-
-## Medium Priority — TensorBoard / other growth
-
-- [x] Confirm `SummaryWriter` isn’t logging huge histograms every step
-- [x] `recent_rewards` already capped at 50 — OK
-- [x] Live stats JSON: overwrite file, don’t append history in memory
-
----
-
-## Low Priority
-
-- [x] Document: “GC won’t free OpenCL allocations tracked in global C++ maps”
-- [x] Stress test: 100 updates, assert RSS delta &lt; threshold with OpenCL on
-- [x] Optional: process `rss` in dashboard with leak warning if delta/update &gt; X MB
+- [ ] GitHub Actions workflow
+  - On tag `v*`: run cibuildwheel → upload artifacts
+  - Optional: publish to PyPI with `PYPI_API_TOKEN` secret
+- [ ] Matrix: Python 3.10–3.12, `manylinux_2_28_x86_64` (or 2_17 if you need older)
+- [ ] Job that only builds; publish job needs manual approval at first
 
 ---
 
 ## Acceptance
 
-- [x] With OpenCL enabled, RSS **flattens** after warmup (not monotonic climb every update)
-- [x] ATen-only and OpenCL RSS behavior similar long-term (aside from steady device pool)
-- [x] `cache_stats` param entries stay O(number of weight tensors), not O(backward calls)
-- [x] `gc.collect()` after update no longer “required” for stability
+- [ ] `pip install opencl-ocl` from PyPI on a clean Linux x86_64 + Python 3.12
+- [ ] `import opencl_ocl` works
+- [ ] Without OpenCL device: no crash, `is_available() == False`, ATen path usable
+- [ ] With OpenCL ICD: kernels run or soft-fallback
+- [ ] manylinux wheel installs on Ubuntu/Fedora/Arch-class systems without rebuild
+
+---
+
+## Order of work (don’t skip)
+
+1. Local wheel + clean venv install  
+2. cibuildwheel manylinux on GitHub Actions  
+3. TestPyPI  
+4. PyPI  
+5. README: `pip install torch && pip install opencl-ocl`
+
+---
 
 ## Notes
 
-- **GC doesn’t clean OpenCL** — `cl_mem` in global `unordered_map` is invisible to Python GC
-- Symptom “GC isn’t cleaning anything” ≈ **native leak + pinned host mirrors**, not broken `gc`
-- Fix ownership in `opencl_ocl.cc` first; then light Python `del` / `gc.collect()` is optional hygiene
-- Fastest confirmation: `compute_chain: aten` → if RAM stabilizes, the bug is the C++ cache path
+- **One download is enough** to justify packaging; PyPI is how the next ten don’t need a `.so` handoff  
+- manylinux fixes “built on Arch, won’t load on Ubuntu” glibc issues — not Windows/macOS  
+- Windows/macOS wheels are separate later (different OpenCL stacks)  
+- Never commit PyPI tokens; use API tokens + GH secrets only  
+
+---
+
+## CPU Memory GC (Python-side hygiene)
+
+- [x] `gc.collect()` after each PPO update block in `_train_single`
+- [x] `gc.collect()` after each PPO update block in `_train_vectorized`
+- [x] `del flat_trajectories, last_values` in `_train_vectorized` after update
+- [x] Existing `del` + `gc.collect()` in `PPOAgent.update` retained  

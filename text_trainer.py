@@ -1365,6 +1365,11 @@ class WalkerTrainer:
                 print(f"  [update] {self.epochs_per_update} epochs over {len(trajectories)} steps in {dt:.2f}s")
                 self._print_dispatch_stats()
                 self._check_memory()
+                try:
+                    import gc
+                    gc.collect()
+                except Exception:
+                    pass
                 trajectories.clear()
 
     def _train_vectorized(self, obs):
@@ -1468,6 +1473,12 @@ class WalkerTrainer:
                 print(f"  [update] {self.epochs_per_update} epochs over {len(flat_trajectories)} steps in {dt:.2f}s")
                 self._print_dispatch_stats()
                 self._check_memory()
+                del flat_trajectories, last_values
+                try:
+                    import gc
+                    gc.collect()
+                except Exception:
+                    pass
                 for t in trajectories:
                     t.clear()
 
