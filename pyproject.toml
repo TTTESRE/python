@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "pybind11>=2.10", "cmake"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opencl-ocl"
+version = "0.1.1"
+description = "OpenCL acceleration for PyTorch neural network operations via libtorch tensors"
+readme = "README"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "tttesre", email = "ttes2@proton.me"},
+]
+keywords = ["opencl", "pytorch", "libtorch", "pybind11", "gemm", "sgemm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/TTTESRE/python"
+Repository = "https://github.com/TTTESRE/python"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["opencl_ocl*"]
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-*"
+archs = ["x86_64"]
+skip = "pp* *-musllinux_*"
+
+[tool.cibuildwheel.linux]
+before-all = "yum install -y ocl-icd ocl-icd-devel || true"
+
+[tool.setuptools.package-data]
+opencl_ocl = ["*.so"]
