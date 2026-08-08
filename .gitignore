@@ -2,3 +2,27 @@ pytorch_dlprim-master/
 walker_checkpoint.pt
 build/
 pngsignore/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+opencl_ocl/*.so
+opencl_ocl/__pycache__/
+__pycache__/
+*.pyc
+*.whl
+*.tar.gz
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
+env/
