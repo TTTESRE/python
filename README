@@ -1,6 +1,6 @@
 # BipedalWalker OpenCL PPO Trainer
 
-> **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python.
+> **Note:** This repository may be named `python` , but it is **NOT** a fork of the Python programming language. It is a standalone project containing an OpenCL-accelerated PPO trainer for the BipedalWalker-v3 Gymnasium environment, plus custom OpenCL kernels for neural network operations , Though text_trainer.py and setup_ocl.py needs Python, The text_trainer.py and dashboard*.py are test for testing the kernel the main project is opencl_ocl.cc.
 
 ## How to Install
 ```bash
