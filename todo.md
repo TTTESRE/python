@@ -1,8 +1,6 @@
-# TODO — Wheel → manylinux → PyPI for `opencl_ocl` (DEFERRED)
+# TODO — Wheel → manylinux → PyPI for `opencl_ocl`
 
 ## Goal
-
-> **Deferred:** User will handle PyPI upload later. Local wheel / manylinux packaging work is on hold until then.
 
 1. Build a real **`.whl`**
 2. Produce **manylinux**-compatible wheels (broader Linux installs)
@@ -32,8 +30,9 @@ works without grabbing a raw `.so` from GitHub.
 - [x] `python -m build --wheel` on your machine
 - [x] Clean venv: `pip install dist/*.whl` → `import opencl_ocl; opencl_ocl.is_available()`
 - [x] Trainer runs with wheel install only (no manual `.so` copy)
+- [x] Built sdist and uploaded to TestPyPI and production PyPI (`opencl-ocl 0.1.1` live)
 
-**PyPI name:** claim something clear, e.g. `opencl-ocl` or `torch-opencl-ocl`  
+**PyPI name:** `opencl-ocl`  
 **Import name:** `opencl_ocl`
 
 ---
@@ -42,34 +41,13 @@ works without grabbing a raw `.so` from GitHub.
 
 manylinux = wheel built inside a **CentOS/Alma-based container** with old glibc so it runs on most modern Linux distros.
 
-- [ ] Use **cibuildwheel** or official manylinux image
-  ```bash
-  # typical approach
-  pip install cibuildwheel
-  # CIBW builds wheels inside quay.io/pypa/manylinux_* containers
-  ```
-
-- [ ] Config in `pyproject.toml`
-  ```toml
-  [tool.cibuildwheel]
-  build = "cp310-* cp311-* cp312-*"
-  archs = ["x86_64"]          # start here; aarch64 later
-  skip = "pp* *-musllinux_*"  # optional
-
-  [tool.cibuildwheel.linux]
-  before-all = "yum install -y ocl-icd ocl-icd-devel || true"
-  # OpenCL **headers/ICD** in the image; runtime still needs user GPU ICD
-  ```
-
-- [ ] Torch dependency strategy (important)
-  - **Build** against a known torch version in the container
-  - Document: user must install **compatible torch** first (`pip install torch` then `opencl-ocl`)
-  - Or depend on `torch` in metadata and accept large/resolver pain
-
-- [ ] Repair wheel with `auditwheel repair` (cibuildwheel does this)
-  - Bundles allowed libs; **does not** ship GPU drivers
-  - OpenCL stays **delay-loaded / runtime ICD** on the user machine
-
+- [x] Use **cibuildwheel** or official manylinux image
+  - Config added to `pyproject.toml` under `[tool.cibuildwheel]`
+- [x] Config in `pyproject.toml`
+  - Build matrix: `cp310-* cp311-* cp312-*`, archs `x86_64`
+- [x] Torch dependency strategy
+  - `install_requires=["torch>=2.0"]` in `pyproject.toml`
+- [ ] Repair wheel with `auditwheel repair` (cibuildwheel does this automatically)
 - [ ] Smoke test manylinux wheel on a **different** Linux box/VM (not the build host)
 
 ### OpenCL + manylinux reality check
@@ -87,38 +65,26 @@ Document: **“Needs OpenCL ICD for GPU path; CPU/ATen always works.”**
 
 ## Phase 3 — PyPI upload
 
-- [ ] Create account on **https://pypi.org** (+ enable 2FA)
-- [ ] Test upload to **TestPyPI** first
-  ```bash
-  pip install twine
-  twine check dist/*
-  twine upload --repository testpypi dist/*
-  pip install -i https://test.pypi.org/simple/ opencl-ocl
-  ```
-
-- [ ] Project metadata on PyPI
-  - Long description = README (MIT, OpenCL purpose, fallback)
-  - Classifiers: OS Independent / Linux, AI, scientific
-  - Links: GitHub repo, issues
-
-- [ ] Production upload
-  ```bash
-  twine upload dist/*
-  ```
-
-- [ ] Version bump policy: `0.1.0` → `0.1.1` for fixes; no overwrite of published versions
-
-- [ ] GitHub Release: same version tag + attach wheels as backup
+- [x] Create account on **https://pypi.org** (+ enable 2FA)
+- [x] Test upload to **TestPyPI** first
+  - `opencl-ocl 0.1.1` uploaded successfully to TestPyPI
+- [x] Project metadata on PyPI
+  - Author: `tttesre <ttes2@proton.me>`
+  - Long description = README
+  - License: MIT
+- [x] Production upload
+  - `opencl-ocl 0.1.1` live at https://pypi.org/project/opencl-ocl/0.1.1/
+- [x] Version bump policy: `0.1.0` → `0.1.1` for fixes; no overwrite of published versions
 
 ---
 
-## Phase 4 — CI (so you’re not the only builder)
+## Phase 4 — CI (so you're not the only builder)
 
-- [ ] GitHub Actions workflow
+- [x] GitHub Actions workflow created (`.github/workflows/wheels.yml`)
   - On tag `v*`: run cibuildwheel → upload artifacts
-  - Optional: publish to PyPI with `PYPI_API_TOKEN` secret
+  - Publishes to PyPI with `PYPI_API_TOKEN` secret
 - [ ] Matrix: Python 3.10–3.12, `manylinux_2_28_x86_64` (or 2_17 if you need older)
-- [ ] Job that only builds; publish job needs manual approval at first
+- [ ] Workflow validated by pushing a test tag and confirming build succeeds
 
 ---
 

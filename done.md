@@ -154,3 +154,32 @@
 - fixer.cc + fixer_opencl run as subprocesses in fix modes
 - Vectorized training no longer resets all envs after every update
 - Live dashboard updates ~5×/sec without blocking training
+
+## CPU Memory GC (Python-side hygiene)
+
+- [x] `gc.collect()` after each PPO update block in `_train_single`
+- [x] `gc.collect()` after each PPO update block in `_train_vectorized`
+- [x] `del flat_trajectories, last_values` in `_train_vectorized` after update
+- [x] Existing `del` + `gc.collect()` in `PPOAgent.update` retained
+
+## PyPI Packaging & Upload
+
+- [x] `pyproject.toml` with package metadata, MIT license, `requires-python >=3.10`, `install_requires=["torch>=2.0"]`
+- [x] `setup.py` with CMake build integration, custom `bdist_wheel` for platform tag
+- [x] Author metadata: `tttesre <ttes2@proton.me>`
+- [x] sdist built and uploaded to TestPyPI (`opencl-ocl 0.1.1`)
+- [x] sdist built and uploaded to production PyPI (`opencl-ocl 0.1.1` live at https://pypi.org/project/opencl-ocl/0.1.1/)
+- [x] Package installable via `pip install opencl-ocl`
+- [x] README includes install instructions (`pip install opencl-ocl` / `uv pip install opencl-ocl`)
+
+## GitHub Actions CI
+
+- [x] `.github/workflows/wheels.yml` created
+  - Triggers on tag `v*` and `workflow_dispatch`
+  - Installs cibuildwheel + torch CPU
+  - Builds with `CIBW_BUILD: "cp310-* cp311-* cp312-*"`, `CIBW_ARCHS: "x86_64"`
+  - Installs OpenCL ICD headers: `yum install -y ocl-icd ocl-icd-devel || true`
+  - Uploads wheels as GitHub Actions artifacts
+  - Publishes to PyPI on tag push using `PYPI_API_TOKEN` secret
+- [ ] Workflow validated by pushing a test tag and confirming build succeeds on GitHub Actions
+- [ ] manylinux wheel produced and attached to GitHub Release
